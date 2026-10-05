@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Clair — Vos réunions, au clair.</title>
+  <link rel="stylesheet" href="/style.css">
+  <script>window.CLAIR_TOKEN = '__TOKEN__';</script>
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/"><span class="brand-icon">c</span>clair<span class="brand-dot">.</span></a>
+    <div class="local-label"><i></i> Entièrement sur votre PC</div>
+    <button class="nav active" id="nav-home"><span>◫</span> Mes réunions</button>
+    <button class="nav" id="nav-record"><span>◉</span> Enregistrer une réunion</button>
+    <button class="nav" id="nav-models"><span>✦</span> Catalogue de modèles</button>
+    <div class="side-heading">RÉUNIONS RÉCENTES</div>
+    <div id="history" class="history"></div>
+    <div class="side-bottom">
+      <button class="nav" id="open-folder"><span>↗</span> Ouvrir les fichiers</button>
+      <button class="nav" id="quit"><span>⏻</span> Quitter Clair</button>
+      <p>Clair 1.1 · Traitement local<br>Aucun compte. Aucun abonnement.</p>
+    </div>
+  </aside>
+  <main>
+    <header class="topbar"><span>VOTRE ESPACE DE RÉUNION</span><span class="privacy"><i></i> Audio et texte restent ici</span></header>
+    <section id="home-view">
+      <div class="hero"><div><div class="eyebrow">MOINS DE NOTES. PLUS DE CLARTÉ.</div><h1>Vos réunions,<br><em>au clair.</em></h1><p>Une vidéo, une conversation, un compte rendu.<br>Retrouvez l’essentiel, sans rien envoyer dans le cloud.</p></div><div class="hero-art" aria-hidden="true"><div class="orbit orbit-one"></div><div class="orbit orbit-two"></div><div class="art-note"><div class="mini-label">L’ESSENTIEL</div><div class="art-line long"></div><div class="art-line"></div><div class="art-line short"></div><div class="art-check">✓ <span>Décisions & prochaines étapes</span></div></div><div class="art-wave">▂ ▅ ▃ █ ▅ ▂ ▆ ▄ ▂</div></div></div>
+      <div class="section-title"><h2>Commencez ici</h2><span>Deux façons de garder l’essentiel</span></div>
+      <div class="start-grid">
+        <button class="start-card import-card" id="show-import"><div class="card-icon">↥</div><span class="card-tag">DÉJÀ ENREGISTRÉ</span><h3>Importer un enregistrement</h3><p>MP4, MP3, WAV… Transformez votre audio ou votre vidéo en texte et en compte rendu.</p><div class="card-link">Choisir un fichier <span>↗</span></div></button>
+        <button class="start-card" id="show-record"><div class="card-icon coral">◉</div><span class="card-tag">PROCHAINE RÉUNION</span><h3>Enregistrer en direct</h3><p>Capturez le son de votre réunion et votre micro. Le compte rendu arrive après l’arrêt.</p><div class="card-link">Préparer l’enregistrement <span>↗</span></div></button>
+      </div>
+      <div class="recent-head"><h2>Votre bibliothèque</h2><span id="meeting-count">0 réunion</span></div>
+      <div id="library" class="library"></div>
+      <div class="footnote">✦ &nbsp; La transcription et le résumé sont produits par deux modèles installés sur votre PC.</div>
+    </section>
+    <section id="models-view" hidden>
+      <button class="back" data-home>← Mes réunions</button><div class="eyebrow">VOTRE IA LOCALE</div><h1 class="page-title">Choisissez votre modèle.</h1>
+      <p class="subtitle">Catalogue vérifié le 5 octobre 2026. Installez les modèles qui vous intéressent et choisissez celui qui rédigera vos comptes rendus. Le modèle de transcription reste Whisper large-v3.</p>
+      <div class="catalog-note"><strong>Une installation, puis tout reste local.</strong><p>Internet est nécessaire pour télécharger les modèles depuis Hugging Face. Vos réunions ne sont pas envoyées. Les tailles sont celles des fichiers ; les repères de mémoire sont des estimations ; prévoyez aussi la mémoire utilisée par Windows. La qualité et la vitesse varient selon le modèle et le PC.</p></div>
+<div class="panel execution-default"><label for="default-execution">Mode de traitement par défaut</label><select id="default-execution"><option value="auto">Automatique — GPU si disponible</option><option value="gpu">GPU NVIDIA — avec RAM si nécessaire</option><option value="cpu">CPU uniquement — processeur et RAM</option></select><p class="input-note">CPU utilise uniquement le processeur pour la transcription et le résumé. GPU utilise la carte NVIDIA et peut répartir les grands modèles entre GPU et RAM. Automatique choisit selon la présence d’un GPU compatible. Le CPU est généralement plus lent.</p></div>
+      <div id="model-download" class="progress-panel" hidden><div><span id="model-download-message"></span><button id="cancel-download" class="text-button">Arrêter</button></div><div class="progress-track"><div id="model-download-fill"></div></div><p id="model-download-size" class="input-note"></p></div>
+      <div id="models-grid" class="models-grid"></div>
+    </section>
+    <section id="record-view" hidden>
+      <button class="back" data-home>← Mes réunions</button><div class="eyebrow">CAPTURE LOCALE</div><h1 class="page-title">Place à la conversation.</h1><p class="subtitle">Lancez votre réunion Teams, puis démarrez l’enregistrement ici.</p>
+      <div class="record-layout"><div class="panel"><label for="record-title">Nom de la réunion</label><input id="record-title" placeholder="Ex. Point projet — équipe produit" value="Réunion Teams">
+      <label for="system-device">Son de la réunion</label><select id="system-device"></select><p class="input-note">Choisissez la sortie audio utilisée par Teams, y compris avec un casque.</p>
+      <label for="mic-device">Votre microphone</label><select id="mic-device"></select><p class="input-note">Choisissez le même microphone que dans Teams.</p>
+      <label for="record-language">Langue de la transcription</label><select id="record-language"><option value="auto">Détection automatique</option><option value="fr">Français</option><option value="en">Anglais</option></select>
+      <label for="record-execution">Traitement de la réunion</label><select id="record-execution"><option value="auto">Automatique — GPU si disponible</option><option value="gpu">GPU NVIDIA — avec RAM si nécessaire</option><option value="cpu">CPU uniquement — processeur et RAM</option></select><label for="record-model">Modèle du compte rendu</label><select id="record-model"></select><p class="input-note">Installez d’autres modèles dans le catalogue. Le choix est conservé pour cette réunion.</p>
+      <label for="record-context">Vocabulaire utile <span class="optional">facultatif</span></label><textarea id="record-context" rows="2" maxlength="3000" placeholder="Noms de personnes, acronymes, nom du projet…"></textarea>
+      <button class="primary record-btn" id="start-record">● Démarrer l’enregistrement</button><button class="stop-btn" id="stop-record" hidden>■ Arrêter et créer le compte rendu</button></div>
+      <div><div class="panel monitor"><div class="monitor-title"><span id="record-indicator" class="record-light"></span><span id="record-state">Prêt à enregistrer</span></div><div id="record-timer" class="timer">00:00:00</div><div class="meter-label"><span>Son de la réunion</span><span>PC</span></div><div class="meter"><div id="system-level"></div></div><div class="meter-label"><span>Votre voix</span><span>MICRO</span></div><div class="meter"><div id="mic-level"></div></div><p id="record-warning" class="input-note">Les indicateurs s’animent lorsque du son est capturé.</p></div><div class="tip"><h3>Un bon départ</h3><p>Vérifiez que les deux indicateurs réagissent pendant la réunion. Le son et le micro sont conservés dans deux pistes séparées.</p><p>Après l’arrêt, Clair transcrit l’audio puis prépare le compte rendu. Gardez l’application ouverte pendant ce traitement.</p></div></div></div>
+    </section>
+    <section id="meeting-view" hidden>
+      <button class="back" data-home>← Mes réunions</button><div class="meeting-heading"><div><div class="eyebrow" id="meeting-date"></div><h1 class="page-title" id="meeting-title"></h1><p class="subtitle" id="meeting-meta"></p></div><span class="status-badge" id="detail-status"></span></div>
+      <div class="progress-panel" id="progress-panel"><div><span id="progress-message"></span><button class="text-button" id="cancel-job">Annuler</button></div><div class="progress-track"><div id="progress-fill"></div></div></div>
+      <div id="error-panel" class="error-panel" hidden></div>
+      <div class="summary-model-row"><label for="summary-model">Modèle pour le prochain résumé</label><select id="summary-model"></select><label for="summary-execution">Exécution du prochain résumé</label><select id="summary-execution"><option value="auto">Automatique — GPU si disponible</option><option value="gpu">GPU NVIDIA — avec RAM si nécessaire</option><option value="cpu">CPU uniquement — processeur et RAM</option></select><span id="report-model" class="input-note"></span></div>
+      <div class="detail-toolbar"><div class="tabs"><button class="tab active" data-tab="summary">Compte rendu</button><button class="tab" data-tab="transcript">Transcription <span id="segment-count"></span></button></div><div class="export-actions"><button class="secondary" id="generate-summary">✦ Générer le résumé</button><button class="secondary" id="copy-content">Copier</button><select id="export-select" aria-label="Exporter"><option value="">Exporter…</option><option value="compte-rendu.md">Compte rendu (.md)</option><option value="compte-rendu.json">Compte rendu (.json)</option><option value="transcription.txt">Transcription (.txt)</option><option value="sous-titres.srt">Sous-titres (.srt)</option></select></div></div>
+      <div class="audio-panel"><span>Écouter l’enregistrement</span><audio id="audio" controls preload="none"></audio></div>
+      <div id="summary-content"></div>
+      <div id="transcript-content" hidden><div class="search-box"><span>⌕</span><input id="transcript-search" placeholder="Rechercher dans la transcription…" aria-label="Rechercher"></div><div id="transcript-list"></div></div>
+    </section>
+  </main>
+  <dialog id="import-dialog"><form id="import-form"><div class="dialog-heading"><div><div class="eyebrow">AUDIO OU VIDÉO</div><h2>Un fichier. Tout l’essentiel.</h2></div><button type="button" class="close" id="close-import" aria-label="Fermer">×</button></div><p class="subtitle">Le fichier est lu sur votre PC. Il n’est jamais envoyé sur un serveur externe. Le résumé sera rédigé en français.</p><label for="import-path">Votre enregistrement</label><div class="file-row"><input id="import-file" type="file" hidden accept=".mp4,.mkv,.mov,.webm,.avi,.wmv,.mp3,.wav,.m4a,.flac,.ogg,.wma,.aac"><input id="import-path" required placeholder="Sélectionnez un fichier ou collez son chemin"><button type="button" class="secondary" id="choose-file">Parcourir…</button></div><p id="import-progress" class="input-note" role="status" aria-live="polite" hidden></p><label for="import-title">Nom de la réunion <span class="optional">facultatif</span></label><input id="import-title" placeholder="Le nom du fichier sera utilisé par défaut"><div class="form-grid"><div><label for="import-language">Langue de la transcription</label><select id="import-language"><option value="auto">Détection automatique</option><option value="fr">Français</option><option value="en">Anglais</option></select></div><div><label for="import-mode">Résultat</label><select id="import-mode"><option value="summary">Transcription + compte rendu</option><option value="text">Transcription seule</option></select></div></div><label for="import-execution">Traitement de l’enregistrement</label><select id="import-execution"><option value="auto">Automatique — GPU si disponible</option><option value="gpu">GPU NVIDIA — avec RAM si nécessaire</option><option value="cpu">CPU uniquement — processeur et RAM</option></select><label for="import-model">Modèle du compte rendu</label><select id="import-model"></select><p class="input-note">Pour ajouter un modèle, ouvrez le catalogue dans le menu de Clair.</p><label for="import-context">Vocabulaire utile <span class="optional">facultatif</span></label><textarea id="import-context" rows="2" maxlength="3000" placeholder="Noms de personnes, acronymes, noms de produits…"></textarea><div class="dialog-footer"><span>✦ Whisper large-v3 + le modèle choisi</span><button type="submit" class="primary" id="import-submit">Transcrire l’enregistrement →</button></div></form></dialog>
+  <div id="toast" role="status" hidden></div>
+</body></html>

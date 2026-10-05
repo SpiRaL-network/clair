@@ -1,0 +1,39 @@
+# Local runtimes, dependencies, binaries, models, downloads and meeting data
+/.venv/
+/runtime/
+/bin/
+/models/
+/downloads/
+/reunions/
+/.imports/
+/settings.json
+/model-checksums.json
+
+# Local reports and screenshots may contain meeting content or machine details
+/LIRE-MOI.md
+/VALIDATION.md
+/*.jpg
+/*.png
+/*.lnk
+
+# Logs, caches, credentials and generated artifacts
+*.log
+*.part
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.mp4
+*.mkv
+*.mov
+*.wav
+*.mp3
+*.srt
+.DS_Store
+Thumbs.db
