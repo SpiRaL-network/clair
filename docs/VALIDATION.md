@@ -6,7 +6,7 @@ sont pas inclus dans le dépôt.
 
 ## Tests automatisés
 
-**41 tests passent** sans modèles réels ni GPU :
+**52 tests passent** sans modèles réels ni GPU :
 
 1. Conservation des passages lors du découpage d'une longue transcription.
 2. Reprise après interruption et validation des identifiants/chemins.
@@ -28,7 +28,12 @@ révisions et empreintes obligatoires, les chemins interdits, les caches hors
 ligne et leur conservation après échec, l’équilibre des éditeurs, l’attribution
 conservatrice par chevauchement, le découpage par mots, les correspondances
 voix/prénom, les corrections prioritaires, l’annulation, les instantanés de
-participants et la protection des nouvelles routes par session/jeton.
+participants et la protection des nouvelles routes par session/jeton. Les tests
+1.3 ajoutent la saisie de plusieurs prénoms, le choix indépendant CPU/CUDA,
+le repli automatique après échec CUDA, le refus du repli en GPU explicite, les
+similarités faibles/concurrentes, les corrections manuelles, les références
+invalides, l’annulation sans mutation, le retrait de la dernière référence,
+la distinction des estimations dans le prompt et les erreurs du worker.
 
 Les tests de stockage, capture et API substituent la disponibilité des modèles.
 Les tests du catalogue utilisent de petits fichiers de fixture ; ils vérifient
@@ -50,6 +55,12 @@ les mécanismes et ne téléchargent pas de poids.
 | Enregistrement complet de 17 min 52 s | Whisper avec mots horodatés en 41 s ; analyse CPU des voix en environ 70 s. Avec le regroupement prudent, 13 groupes estimés et 508 passages ; ces groupes ne sont pas une mesure du nombre réel de personnes |
 | Réinstallation des modèles de voix | Tailles et SHA-256 des deux ONNX vérifiés ; archive lue pour le membre connu |
 | Thème sombre | Choix conservé après rechargement ; catalogue, participants, voix et transcription inspectés dans le navigateur |
+| Voix CPU et GPU NVIDIA, échantillon 16 s | Même découpage en deux groupes ; CPU environ 0,6 s et GPU 1,9 s dans les essais directs après chauffe. Premier chargement CUDA nettement plus long |
+| Références de voix, deux exemples nommés | Les quatre prises de parole ont été rapprochées du bon exemple sur CPU et GPU ; scores cosinus environ 0,83 à 0,92, sur cet échantillon uniquement |
+| Pipeline application Whisper GPU puis voix GPU | Terminé après isolation du worker ; fournisseur CUDA enregistré, dix passages avec repères de mots, sans conflit de DLL du VAD |
+| Interface participants et références | Trois noms saisis sur trois lignes, persistés et disponibles dans les sélecteurs ; deux extraits ajoutés via l’interface, cinq passages attribués et vérification des quatre exports après résumé |
+| Références sur CPU après GPU | Réanalyse locale des mêmes extraits terminée ; attributions conservées, fournisseur CPU enregistré |
+| Voix GPU sur enregistrement complet de 17 min 52 s | 134,23 s, 11 groupes estimés et 206 prises de parole. Plus lent que le précédent essai CPU (~70 s) ; les écarts de groupes ne constituent pas une mesure de qualité ou du nombre réel de personnes |
 | Redémarrage | Préférences modèle/matériel conservées ; API, exports et lecture audio opérationnels |
 
 Les temps sont ceux de ce matériel et de ces exemples, pas des garanties de
@@ -85,3 +96,8 @@ connu de deux voix. Le résultat automatique de 13 groupes sur la vidéo longue
 n’a pas de vérité terrain annotée : il peut encore sur-segmenter ou fusionner
 des personnes. Pour une réunion dont le nombre de personnes qui parlent est
 connu, renseigner ce nombre et vérifier les extraits avant attribution.
+
+La comparaison des références est validée sur un court échantillon public de
+deux voix. Elle n’est pas une évaluation statistique sur les participants réels
+de la réunion complète, dont les identités ne sont pas annotées. Le GPU ne
+garantit pas une accélération de la diarisation ; CPU reste un choix pertinent.

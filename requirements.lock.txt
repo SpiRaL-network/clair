@@ -22,7 +22,10 @@ iniconfig==2.3.0
 numpy==2.5.3
 nvidia-cublas-cu12==12.9.2.10
 nvidia-cuda-nvrtc-cu12==12.9.86
+nvidia-cuda-runtime-cu12==12.9.79
+nvidia-cufft-cu12==11.4.1.4
 nvidia-cudnn-cu12==9.27.0.42
+nvidia-nvjitlink-cu12==12.9.86
 onnxruntime==1.30.0
 opentelemetry-api==1.45.0
 packaging==26.3
@@ -35,8 +38,9 @@ Pygments==2.21.0
 pytest==9.1.1
 PyYAML==6.0.3
 requests==2.34.2
-sherpa-onnx==1.13.8
-sherpa-onnx-core==1.13.8
+sherpa-onnx @ https://huggingface.co/csukuangfj2/sherpa-onnx-wheels/resolve/4de10716b1043c13380c79f3f12127a6c6429650/cuda/1.13.8/sherpa_onnx-1.13.8%2Bcuda12.cudnn9-cp312-cp312-win_amd64.whl#sha256=e37edf2c9f53d735afc07fd81f118e4160d8d05aa5a87377db923610b096bd48 ; sys_platform == 'win32' and python_version == '3.12'
+sherpa-onnx==1.13.8 ; sys_platform != 'win32' or python_version != '3.12'
+sherpa-onnx-core==1.13.8 ; sys_platform != 'win32' or python_version != '3.12'
 starlette==1.7.0
 tokenizers==0.23.2
 tqdm==4.70.1

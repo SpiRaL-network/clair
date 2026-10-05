@@ -11,7 +11,7 @@ traitements audio/LLM dans des threads. Aucun service d'inférence tiers n'est r
 | `core.py` | Stockage des réunions, extraction audio, Whisper, capture et génération des rapports |
 | `catalog.py` | Installation et reprise des GGUF, contrôle d'intégrité et préférences |
 | `discovery.py` | Découverte Hugging Face, licences et validation stricte des métadonnées |
-| `voices.py` | Modèles ONNX vérifiés, séparation CPU et alignement conservateur par mot |
+| `voices.py` | Modèles ONNX vérifiés, séparation CPU/CUDA, références de voix et alignement conservateur par mot |
 | `models-catalog.json` | Catalogue, révisions fixées, tailles et SHA-256 des fichiers |
 | `prepare.py` | Téléchargement des composants et modèles initiaux |
 | `launch.py`, `Lancer.cmd` | Démarrage local et diagnostics |
@@ -25,7 +25,7 @@ Média importé ou capture PC + micro
   -> extraction / assemblage audio 16 kHz
   -> Whisper large-v3 (CPU int8 ou GPU float16)
   -> mots horodatés + segments
-  -> segmentation et regroupement des voix (optionnel, CPU)
+  -> segmentation et regroupement des voix (optionnel, CPU/CUDA)
   -> découpage aux changements de voix + TXT/SRT
   -> découpage de la transcription
   -> rapports intermédiaires JSON avec le GGUF sélectionné
@@ -92,7 +92,7 @@ qualité ne sont pas prouvées par une empreinte valide.
 
 ## Séparation des voix et attributions
 
-sherpa-onnx 1.13.8 exécute sur CPU la segmentation Pyannote 3.0 et un extracteur
+sherpa-onnx 1.13.8 exécute sur CPU ou CUDA la segmentation Pyannote 3.0 et un extracteur
 ERes2Net 3D-Speaker entraîné sur VoxCeleb. Les conversions ONNX proviennent des
 releases officielles sherpa-onnx ; tailles et SHA-256 sont fixés dans `voices.py`
 et contrôlés avant installation puis avant analyse. L’archive est lue pour un
@@ -131,3 +131,36 @@ La CI teste le code sans modèles ni GPU. Une modification des moteurs, prompts,
 formats ou modèles doit aussi être vérifiée par une inférence réelle et une
 relecture du résultat. Les tests de substitution ne prouvent pas la compatibilité
 de toutes les architectures de modèles.
+
+### Processus des voix et références
+
+Chaque analyse démarre `voices.py --worker` avec le Python de l’application,
+sans fenêtre. Audio, paramètres et résultats restent locaux ; le protocole JSON
+sur pipes transmet progression et résultat. Un processus séparé évite la
+collision entre les DLL ONNX Runtime du VAD de Whisper et de sherpa-onnx CUDA.
+Il est terminé lors d’une annulation, puis sa mémoire GPU est libérée.
+
+Sous Windows Python 3.12, le wheel officiel sherpa-onnx
+`1.13.8+cuda12.cudnn9` est verrouillé dans `requirements.lock.txt` par révision
+Hugging Face et SHA-256. CUDA runtime, cuFFT et nvJitLink complètent les
+bibliothèques cuBLAS/cuDNN déjà requises. Le fournisseur `cuda` est configuré
+pour la segmentation et l’extracteur ; `cpu` reste disponible. Le mode
+automatique peut redémarrer le worker sur CPU en cas d’échec CUDA ; le mode
+GPU explicite échoue sans repli silencieux. Le fournisseur effectivement utilisé
+est enregistré dans `voice_device`.
+
+Les références contiennent prénom, début et fin, de 3 à 20 secondes, au maximum
+60 par réunion. ERes2Net produit un vecteur normalisé par exemple et par prise
+de parole exploitable (au moins 1,5 seconde, jusqu’à 12 secondes analysées). Le
+score de chaque prénom est la meilleure similarité cosinus parmi ses exemples.
+L’attribution exige au moins 0,65 et une marge de 0,10 sur le deuxième prénom.
+Ces réglages sont des heuristiques, sans calibration statistique ni garantie
+d’identité. Les prises de parole superposées ou silencieuses sont exclues.
+L’alignement temporel des noms conserve les seuils 55 % / 25 %.
+
+Les attributions issues des références portent `speaker_reference`; une
+correction manuelle porte `speaker_manual` et reste prioritaire, même lors du
+retrait de la dernière référence. Le batch de références, les attributions,
+les métriques et les exports ne sont validés qu’après réussite, jamais après
+annulation. Les vecteurs ne sont pas enregistrés : ils sont recalculés depuis
+l’audio local. Retirer un participant supprime également ses références.

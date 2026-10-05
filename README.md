@@ -15,11 +15,12 @@ enregistrer le son du PC et le microphone pour traiter une réunion après son a
 - Catalogue dynamique : actualisation quotidienne depuis Hugging Face, bouton
   d’actualisation, recherche et cache hors ligne. Sept modèles initiaux de 2026.
   Nouveautés à licence ouverte, GGUF Q4_K_M ; téléchargements à la demande avec SHA-256.
-- Séparation locale des voix sur CPU, extraits à écouter, association aux prénoms,
+- Séparation locale des voix sur CPU ou GPU NVIDIA, extraits à écouter, association aux prénoms,
   corrections par passage et prise en compte dans le prochain compte rendu.
 - Thèmes clair, sombre et système ; préférence conservée dans le navigateur.
 - Choix du modèle par réunion ; régénération du résumé sans retranscription.
-- Traitement automatique, GPU NVIDIA, ou CPU uniquement.
+- Reconnaissance des voix à partir d’extraits nommés de la réunion (plusieurs exemples par personne).
+- Traitement automatique, GPU NVIDIA, ou CPU uniquement, avec choix indépendant pour les voix.
 - Capture WASAPI du son du PC et du microphone en pistes séparées.
 - Aucun compte ni service d'inférence cloud. Interface sur `127.0.0.1:8787`.
 
@@ -111,3 +112,11 @@ mémoire indiquées sont des estimations ; un grand modèle peut partager GPU et
 - [Composants tiers](THIRD_PARTY_NOTICES.md)
 - [Licence MIT](LICENSE) pour le code de Clair ; les composants et modèles téléchargés
   conservent leurs propres licences.
+
+### Mise à jour vers 1.3
+
+Fermer Clair, récupérer les sources puis relancer `Installer.cmd` pour installer
+le moteur sherpa-onnx CPU/CUDA 12.8 + cuDNN 9 et ses bibliothèques NVIDIA.
+Les dépendances CUDA restent utilisables en mode CPU sur un PC sans carte NVIDIA.
+Le paquet Windows Python 3.12 provient de l’index officiel du projet et est fixé
+à une révision et un SHA-256 ; les médias restent locaux.

@@ -81,7 +81,7 @@ Le champ de recherche filtre les noms, éditeurs et licences.
    ou retours à la ligne ; ils peuvent être modifiés ensuite.
 2. Activer **Distinguer les voix après la transcription** pour un import ou une
    capture. Les modèles sont installés par `Installer.cmd`, ou avec le bouton
-   correspondant dans le catalogue. Le moteur travaille toujours sur CPU.
+   correspondant dans le catalogue. Choisir CPU, GPU NVIDIA ou Automatique dans **Traitement des voix**. Ce choix est indépendant de la transcription et du résumé. Automatique reprend sur CPU si CUDA ne peut pas démarrer ; GPU explicite affiche une erreur et ne change pas silencieusement de moteur.
 3. Laisser **Nombre de voix attendues** à 0 pour une estimation, ou indiquer
    le nombre de personnes qui parlent réellement (1 à 30). Le nombre de noms
    déclarés ne force pas le nombre de voix.
@@ -173,3 +173,34 @@ Ces fichiers ne sont pas versionnés. Fermer l'onglet ne ferme pas le service.
 
 Les journaux principaux sont `service.log`, `application.log` et
 `moteur-resume.log`. Retirer les chemins et contenus privés avant de les partager.
+
+## Retrouver une personne à partir de sa voix
+
+1. Dans **Participants et voix**, saisir un prénom par ligne (ou des noms séparés
+   par virgules), puis cliquer sur **Enregistrer les participants**. Tous les noms
+   deviennent disponibles dans les sélecteurs.
+2. Choisir un passage où une seule personne parle clairement, idéalement 5 à
+   10 secondes. Cliquer sur **Utiliser ce passage comme référence** dans la
+   transcription, ou positionner le lecteur et utiliser **Prendre 8 s depuis le
+   lecteur**. Le début et la fin sont ajustables en secondes (3 à 20 secondes).
+3. Écouter l’extrait, choisir le participant et cliquer sur **Associer et retrouver
+   cette voix**. Si aucune détection n’a encore été faite, Clair la lance d’abord.
+4. Ajouter d’autres exemples de la même personne et des exemples des autres
+   participants. Tous les extraits enregistrés sont comparés aux prises de parole.
+5. Vérifier les passages marqués **Correspondance avec un extrait · à vérifier**.
+   Les prises de parole trop courtes, superposées, peu similaires ou en concurrence
+   restent sans nouvelle attribution. Les corrections manuelles, y compris
+   **Non attribué**, sont conservées.
+6. Cliquer sur **Refaire le résumé** pour utiliser les nouvelles attributions.
+
+Les extraits et prénoms sont propres à cette réunion, stockés sur le PC. Aucun
+profil de voix n’est partagé entre réunions. **Supprimer** retire une référence
+et recalcule les correspondances avec les exemples restants. Une réanalyse
+complète des voix efface les références et attributions précédentes. Une
+annulation ou un échec conserve les résultats précédents. Pour une ancienne
+transcription sans repères de mots, retranscrire donne un découpage plus précis.
+
+Un échantillon mal nommé ou contenant plusieurs personnes peut produire de
+mauvaises attributions : le système compare des sons, il ne prouve pas une
+identité. Le GPU peut être plus lent sur de très courts extraits à cause du
+chargement des modèles ; le premier lancement CUDA peut aussi être plus long.

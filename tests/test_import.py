@@ -88,9 +88,28 @@ def test_new_voice_settings_are_saved_with_uploaded_media(local_client, monkeypa
     client, module, _ = local_client
     monkeypatch.setattr(module.studio.voices, 'ready', lambda: True)
     response = client.post('/api/import-upload', params={'filename':'test.mp4',
-        'participants':'Alice; Karim', 'diarize':True, 'speaker_count':2}, content=b'test-audio')
+        'participants':'Alice\nKarim', 'diarize':True, 'speaker_count':2,
+        'execution':'gpu','voice_execution':'cpu'}, content=b'test-audio')
     assert response.status_code == 200
     meeting = response.json()
     assert meeting['participants'] == ['Alice','Karim']
     assert meeting['diarize'] and meeting['speaker_count'] == 2
+    assert meeting['execution'] == 'gpu' and meeting['voice_execution'] == 'cpu'
     assert client.post('/api/import-upload', params={'filename':'test.mp4','speaker_count':99},content=b'x').status_code == 422
+
+
+def test_reference_api_validates_payload_and_requires_local_session(local_client, monkeypatch):
+    client, module, _ = local_client
+    meeting = module.studio.create('Test', 'unused.wav', participants='Alice\nKarim')
+    url = '/api/meetings/' + meeting['id'] + '/voice-references'
+    received = []
+    monkeypatch.setattr(module.studio, 'launch_voice_references', lambda *args: received.append(args))
+    payload = {'references':[{'name':'Alice','start':1.5,'end':6.5}], 'execution':'cpu'}
+    assert client.post(url, json=payload).status_code == 200
+    assert received == [(meeting['id'], payload['references'], 'cpu')]
+    assert client.post(url, json={'references':[{'name':'Alice','start':-1,'end':6}]}).status_code == 422
+    client.headers.pop('X-Clair-Token')
+    assert client.post(url, json=payload).status_code == 403
+    client.cookies.clear()
+    assert client.post(url, json=payload).status_code == 401
+    assert len(received) == 1

@@ -135,7 +135,7 @@ async def import_upload(request: Request, filename: str = Query(max_length=255),
                         title: str = Query(default='', max_length=160), language: str = 'auto',
                         context: str = Query(default='', max_length=3000), auto_summary: bool = True,
                         llm_model: str = '', execution: str = '', participants: str = Query(default='', max_length=3000),
-                        diarize: bool = False, speaker_count: int = Query(default=0, ge=0, le=30)):
+                        diarize: bool = False, speaker_count: int = Query(default=0, ge=0, le=30), voice_execution: str = ''):
     # Browser-selected files are copied over loopback in chunks, never loaded wholly into RAM.
     filename = Path(filename.replace('\\', '/')).name
     suffix = Path(filename).suffix.lower()
@@ -163,7 +163,7 @@ async def import_upload(request: Request, filename: str = Query(max_length=255),
             if studio.active or studio.recorder.streams:
                 raise RuntimeError('Un traitement ou un enregistrement est déjà en cours.')
             m = studio.create(title or Path(filename).stem, path, language, context, auto_summary, llm_model,
-                              execution, participants, diarize, speaker_count)
+                              execution, participants, diarize, speaker_count, voice_execution)
             source = studio.folder(m['id']) / ('source' + suffix)
             path.replace(source)
             m = studio.update(m['id'], source=str(source))
@@ -185,6 +185,7 @@ class ImportRequest(BaseModel):
     participants: str = Field(default='', max_length=3000)
     diarize: bool = False
     speaker_count: int = Field(default=0, ge=0, le=30)
+    voice_execution: str = ''
 
 @app.post('/api/import')
 def import_file(body: ImportRequest):
@@ -199,7 +200,7 @@ def import_file(body: ImportRequest):
         if body.language not in ('fr', 'en', 'auto'):
             raise ValueError('Langue invalide.')
         m = studio.create(body.title or path.stem, path, body.language, body.context, body.auto_summary, body.llm_model,
-                          body.execution, body.participants, body.diarize, body.speaker_count)
+                          body.execution, body.participants, body.diarize, body.speaker_count, body.voice_execution)
         studio.launch(m['id'])
         return m
 
@@ -232,10 +233,25 @@ def name_voice(mid: str, voice_id: str, body: VoiceNameRequest):
 
 class DiarizationRequest(BaseModel):
     speaker_count: int = Field(default=0, ge=0, le=30)
+    execution: str | None = None
 
 @app.post('/api/meetings/{mid}/diarize')
 def diarize_meeting(mid: str, body: DiarizationRequest):
-    studio.launch_diarization(mid, body.speaker_count)
+    studio.launch_diarization(mid, body.speaker_count, body.execution)
+    return {'ok': True}
+
+class VoiceReference(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    start: float = Field(ge=0, allow_inf_nan=False)
+    end: float = Field(gt=0, allow_inf_nan=False)
+
+class VoiceReferencesRequest(BaseModel):
+    references: list[VoiceReference] = Field(max_length=60)
+    execution: str | None = None
+
+@app.post('/api/meetings/{mid}/voice-references')
+def match_voice_references(mid: str, body: VoiceReferencesRequest):
+    studio.launch_voice_references(mid, [r.model_dump() for r in body.references], body.execution)
     return {'ok': True}
 
 class RetryRequest(BaseModel):
@@ -287,13 +303,14 @@ class RecordingRequest(BaseModel):
     participants: str = Field(default='', max_length=3000)
     diarize: bool = False
     speaker_count: int = Field(default=0, ge=0, le=30)
+    voice_execution: str = ''
 
 @app.post('/api/record/start')
 def record_start(body: RecordingRequest):
     if body.language not in ('fr', 'en', 'auto'):
         raise ValueError('Langue invalide.')
     return studio.start_recording(body.title, body.system_id, body.mic_id, body.language, body.context, body.llm_model,
-                                  body.execution, body.participants, body.diarize, body.speaker_count)
+                                  body.execution, body.participants, body.diarize, body.speaker_count, body.voice_execution)
 
 @app.post('/api/record/stop')
 def record_stop():

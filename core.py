@@ -1,5 +1,6 @@
 from __future__ import annotations
 import atexit
+import copy
 import gc
 import json
 import os
@@ -26,7 +27,7 @@ import numpy as np
 import requests
 from pydantic import BaseModel, Field
 from catalog import ModelCatalog
-from voices import VoiceEngine, split_at_voice_changes
+from voices import VoiceEngine, split_at_voice_changes, apply_reference_names
 
 def stamp(seconds: float) -> str:
     seconds = max(0, int(seconds))
@@ -35,7 +36,7 @@ def stamp(seconds: float) -> str:
 def chunks(segments, limit=6500):
     part, size = [], 0
     for s in segments:
-        line = f'[{stamp(s["start"])}] {segment_text(s)}'
+        line = f'[{stamp(s["start"])}] {segment_text(s, attribution=True)}'
         if part and size + len(line) > limit:
             yield '\n'.join(part)
             part, size = [], 0
@@ -48,14 +49,16 @@ def participant_names(value):
     if isinstance(value, str):
         value = re.split(r'[,;\n]', value)
     if not isinstance(value, list) or any(not isinstance(name, str) for name in value):
-        raise ValueError('Indiquez les prénoms, séparés par des virgules.')
+        raise ValueError('Indiquez les prénoms, un par ligne ou séparés par des virgules.')
     names = list(dict.fromkeys(name.strip() for name in value if name.strip()))
     if len(names) > 30 or any(len(name) > 80 or any(ord(c) < 32 for c in name) for name in names):
         raise ValueError('Maximum 30 participants, avec 80 caractères par nom.')
     return names
 
-def segment_text(segment):
+def segment_text(segment, attribution=False):
     name = segment.get('speaker')
+    if name and attribution and segment.get('speaker_reference'):
+        name += ' (correspondance vocale avec un extrait, à vérifier)'
     if not name and segment.get('voice'):
         name = 'Voix ' + segment['voice'].split('-')[-1] + ' (non confirmée)'
     return (name + ' : ' if name else '') + segment['text']
@@ -188,8 +191,11 @@ class LocalLLM:
             'ne constitue pas une action assignée. '
             'N’attribue pas une action à une personne sans preuve; écris Non précisé. '
             'La liste des participants déclarés est un contexte fourni par l’utilisateur, jamais une preuve '
-            'de présence ou d’identité vocale. Seuls les passages portant un prénom ont été attribués '
-            'manuellement par l’utilisateur. Les mentions Voix N (non confirmée) sont des estimations '
+            'de présence ou d’identité vocale. Les prénoms proviennent d’attributions manuelles ou '
+            'de comparaisons avec des extraits nommés. Les mentions correspondance vocale avec un extrait, '
+            'à vérifier sont des estimations automatiques et ne prouvent pas l’identité. '
+            'N’attribue pas une responsabilité lorsque la correspondance est ambiguë. '
+            'Les mentions Voix N (non confirmée) sont des estimations '
             'automatiques et ne permettent pas d’attribuer une action à un prénom. '
             'Un passage sans prénom reste sans intervenant identifié. '
             'Une échéance absente vaut Non précisée. Une date relative reste telle que prononcée. '
@@ -422,7 +428,7 @@ class Studio:
                     pass
             return sorted(result, key=lambda m: m['created'], reverse=True)
 
-    def create(self, title, source, language='auto', context='', auto_summary=True, llm_model=None, execution=None, participants='', diarize=False, speaker_count=0):
+    def create(self, title, source, language='auto', context='', auto_summary=True, llm_model=None, execution=None, participants='', diarize=False, speaker_count=0, voice_execution=None):
         participants = participant_names(participants)
         if not isinstance(speaker_count, int) or not 0 <= speaker_count <= 30:
             raise ValueError('Indiquez de 1 à 30 voix, ou 0 pour une détection automatique.')
@@ -430,12 +436,14 @@ class Studio:
             raise ValueError('Installez les modèles de voix depuis le catalogue, ou désactivez la détection des voix.')
         llm_model = self.catalog.resolve(llm_model, require_installed=auto_summary)
         execution = self.catalog.resolve_execution(execution)
+        voice_execution = self.catalog.resolve_execution(voice_execution or execution)
         mid = secrets.token_hex(8)
         m = {'id': mid, 'title': title[:160] or 'Nouvelle réunion', 'source': str(source),
              'created': time.time(), 'status': 'queued', 'progress': 0,
              'message': 'En attente', 'language': language, 'context': context[:3000],
              'auto_summary': auto_summary, 'llm_model': llm_model, 'execution': execution,
              'participants': participants, 'diarize': diarize, 'speaker_count': speaker_count,
+             'voice_execution': voice_execution, 'voice_references': [],
              'voices': [], 'voice_turns': [], 'duration': 0, 'segments': [], 'report': None}
         self.save(m)
         return m
@@ -452,9 +460,11 @@ class Studio:
                 if segment.get('speaker') and segment['speaker'] not in names:
                     segment.pop('speaker')
                     segment.pop('speaker_manual', None)
+                    segment.pop('speaker_reference', None)
             for voice in m.get('voices', []):
                 if voice.get('name') not in names:
                     voice['name'] = ''
+            m['voice_references'] = [r for r in m.get('voice_references', []) if r['name'] in names]
             m.update(participants=names, report_stale=bool(m.get('report')))
             self.save(m)
             self.write_transcript(mid)
@@ -471,7 +481,10 @@ class Studio:
                 raise ValueError('Ajoutez ce prénom dans les participants avant de l’utiliser.')
             segment = m['segments'][index]
             if segment.get('speaker', '') == speaker:
-                return m
+                if segment.get('speaker_manual'):
+                    return m
+            segment.pop('speaker_reference', None)
+            segment.pop('speaker_score', None)
             if speaker:
                 segment['speaker'] = speaker
                 segment['speaker_manual'] = True
@@ -499,6 +512,7 @@ class Studio:
             voice['name'] = name
             for segment in m['segments']:
                 if segment.get('voice') == voice_id and not segment.get('speaker_manual'):
+                    segment.pop('speaker_reference', None)
                     if name:
                         segment['speaker'] = name
                     else:
@@ -508,7 +522,7 @@ class Studio:
             self.write_transcript(mid)
             return m
 
-    def launch_diarization(self, mid, speaker_count=0):
+    def launch_diarization(self, mid, speaker_count=0, execution=None, references=None):
         with self.lock:
             if self.active or self.recorder.streams:
                 raise RuntimeError('Un traitement ou un enregistrement est déjà en cours.')
@@ -519,16 +533,39 @@ class Studio:
                 raise ValueError('Installez les modèles de voix dans le catalogue.')
             if not isinstance(speaker_count, int) or not 0 <= speaker_count <= 30:
                 raise ValueError('Nombre de voix invalide.')
-            self.update(mid, speaker_count=speaker_count)
+            execution = self.catalog.resolve_execution(execution or m.get('voice_execution') or m.get('execution', 'auto'))
+            self.voices.provider(execution)
+            self.update(mid, speaker_count=speaker_count, voice_execution=execution)
             self.active = mid
             self.cancelled.clear()
-            threading.Thread(target=self._run_diarization, args=(mid,), daemon=True).start()
+            threading.Thread(target=self._run_diarization, args=(mid, references), daemon=True).start()
 
-    def _run_diarization(self, mid):
+    def launch_voice_references(self, mid, references, execution=None):
+        with self.lock:
+            m = self.read(mid)
+            if not isinstance(references, list) or not 0 <= len(references) <= 60:
+                raise ValueError('Maximum 60 extraits de référence.')
+            checked = []
+            for ref in references:
+                name, start, end = ref.get('name'), ref.get('start'), ref.get('end')
+                if name not in m.get('participants', []):
+                    raise ValueError('Ajoutez et enregistrez ce prénom dans les participants.')
+                if (not isinstance(start, (int, float)) or not isinstance(end, (int, float)) or
+                    not np.isfinite([start, end]).all() or not 0 <= start < end <= m.get('duration', 0) or
+                    not 3 <= end - start <= 20):
+                    raise ValueError('Choisissez un extrait de 3 à 20 secondes, compris dans la réunion.')
+                checked.append({'name': name, 'start': round(start, 3), 'end': round(end, 3)})
+            # The batch is committed only after successful matching; failed/cancelled jobs keep the old data.
+            self.launch_diarization(mid, m.get('speaker_count', 0), execution, checked)
+
+    def _run_diarization(self, mid, references=None):
         try:
             self.llm.stop()
-            self.diarize(mid)
-            self.update(mid, status='done', progress=100, message='Voix détectées. Écoutez les extraits puis associez les prénoms.')
+            if references is None:
+                self.diarize(mid)
+            else:
+                self.identify_voices(mid, references)
+            self.update(mid, status='done', progress=100, message='Voix analysées. Vérifiez les attributions puis refaites le résumé.')
         except Cancelled:
             self.update(mid, status='cancelled', message='Détection annulée. Les attributions précédentes sont conservées.')
         except Exception as error:
@@ -537,19 +574,65 @@ class Studio:
             with self.lock:
                 self.active = None
 
-    def diarize(self, mid):
-        from faster_whisper.audio import decode_audio
+    def voice_operation(self, mid, operation):
         m = self.read(mid)
-        self.update(mid, status='diarizing', progress=79, message='Analyse locale des voix sur CPU…')
-        audio = decode_audio(str(self.folder(mid) / 'audio.wav'), sampling_rate=16000)
+        execution = m.get('voice_execution') or m.get('execution', 'auto')
+        provider = self.voices.provider(execution)
+        self.update(mid, status='diarizing', progress=79,
+                    message=f'Analyse locale des voix sur {"GPU NVIDIA" if provider == "cuda" else "CPU"}…')
+        try:
+            return operation(provider), provider
+        except RuntimeError as error:
+            self.check()
+            if execution == 'gpu' and provider == 'cuda':
+                raise RuntimeError('Le traitement des voix sur GPU a échoué. Choisissez CPU ou Automatique. ' + str(error)[:350]) from error
+            if execution != 'auto' or provider != 'cuda':
+                raise
+            self.update(mid, message='Le moteur GPU des voix est indisponible. Reprise automatique sur CPU…')
+            return operation('cpu'), 'cpu'
+
+    def identify_voices(self, mid, references):
+        m = self.read(mid)
         started = time.time()
-        turns, detected = self.voices.analyze(audio, m.get('speaker_count', 0), self.cancelled,
-            lambda ratio: self.update(mid, message=f'Analyse des voix · {round(ratio * 100)} %'))
+        def operation(provider):
+            turns, detected, matched = self.voices.analyze_file(self.folder(mid) / 'audio.wav',
+                m.get('speaker_count', 0), self.cancelled,
+                lambda ratio: self.update(mid, message=f'Recherche des voix de référence · {round(ratio * 100)} %'),
+                provider, references, m.get('voice_turns'), m.get('voices'))
+            self.check()
+            return turns, detected, matched
+        (turns, detected, matched), provider = self.voice_operation(mid, operation)
+        if not detected:
+            raise RuntimeError('Aucune voix détectée. Choisissez un autre extrait.')
+        # Existing segment boundaries and manual corrections are kept when voices already exist.
+        originals = copy.deepcopy(m['segments'])
+        segments = m['segments'] if m.get('voice_turns') else split_at_voice_changes(m['segments'], turns)
+        if not m.get('voice_turns'):
+            for segment in segments:
+                original = next((s for s in originals if s.get('speaker_manual') and
+                    s['start'] <= segment['start'] and s['end'] >= segment['end']), None)
+                if original:
+                    segment['speaker_manual'] = True
+                    if original.get('speaker'):
+                        segment['speaker'] = original['speaker']
+        apply_reference_names(segments, matched)
+        self.update(mid, segments=segments, voices=detected, voice_turns=turns, voice_references=references,
+                    voice_reference_matches=len(matched), voice_device=provider,
+                    voice_identification_seconds=round(time.time() - started, 1), report_stale=bool(m.get('report')))
+        self.write_transcript(mid)
+
+    def diarize(self, mid):
+        m = self.read(mid)
+        started = time.time()
+        (turns, detected, _), provider = self.voice_operation(mid, lambda provider:
+            self.voices.analyze_file(self.folder(mid) / 'audio.wav', m.get('speaker_count', 0), self.cancelled,
+                lambda ratio: self.update(mid, message=f'Analyse des voix · {round(ratio * 100)} %'), provider))
         self.check()
         if not detected:
             raise RuntimeError('Aucune voix détectée. Vérifiez l’audio ; la transcription précédente est conservée.')
         segments = split_at_voice_changes(m['segments'], turns)
         self.update(mid, segments=segments, voices=detected, voice_turns=turns,
+                    voice_device=provider, voice_references=[], voice_reference_matches=0,
                     diarization_seconds=round(time.time() - started, 1), report_stale=bool(m.get('report')))
         self.write_transcript(mid)
 
@@ -741,12 +824,12 @@ class Studio:
         (self.folder(mid) / 'compte-rendu.md').write_text(markdown_report(report) + '\n\nModèle : ' + report['model']['name'], encoding='utf-8')
         (self.folder(mid) / 'compte-rendu.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
 
-    def start_recording(self, title, system_id, mic_id, language='auto', context='', llm_model=None, execution=None, participants='', diarize=False, speaker_count=0):
+    def start_recording(self, title, system_id, mic_id, language='auto', context='', llm_model=None, execution=None, participants='', diarize=False, speaker_count=0, voice_execution=None):
         with self.lock:
             if self.active or self.recorder.streams:
                 raise RuntimeError('Un traitement ou un enregistrement est déjà en cours.')
             m = self.create(title, '', language, context, llm_model=llm_model, execution=execution,
-                            participants=participants, diarize=diarize, speaker_count=speaker_count)
+                            participants=participants, diarize=diarize, speaker_count=speaker_count, voice_execution=voice_execution)
             try:
                 self.recorder.start(self.folder(m['id']), system_id, mic_id)
             except Exception as e:
