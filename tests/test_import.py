@@ -64,3 +64,33 @@ def test_upload_requires_local_session_and_token(local_client):
     client.cookies.clear()
     assert client.post('/api/import-upload?filename=test.mp4', content=b'x').status_code == 401
     assert not launched
+
+
+def test_participant_and_voice_edits_require_valid_session_and_keep_audio(local_client):
+    client, module, _ = local_client
+    m = module.studio.create('Test', 'unused.mp4', participants='Alice, Karim')
+    mid = m['id']
+    module.studio.update(mid, segments=[{'start':1,'end':3,'text':'Bonjour','voice':'voice-1'}],
+                         voices=[{'id':'voice-1','name':''}])
+    url = '/api/meetings/' + mid
+    assert client.post(url + '/voices/voice-1', json={'name':'Alice'}).status_code == 200
+    assert client.get(url).json()['segments'][0]['speaker'] == 'Alice'
+    assert client.post(url + '/speaker', json={'index':0,'start':1,'speaker':'Karim'}).status_code == 200
+    assert client.post(url + '/speaker', json={'index':0,'start':99,'speaker':'Alice'}).status_code == 400
+    assert client.post(url + '/participants', json={'participants':'Karim'}).status_code == 200
+    client.headers.pop('X-Clair-Token')
+    assert client.post(url + '/voices/voice-1', json={'name':'Karim'}).status_code == 403
+    assert client.post('/api/models/refresh').status_code == 403
+    assert client.post('/api/voices/install').status_code == 403
+
+
+def test_new_voice_settings_are_saved_with_uploaded_media(local_client, monkeypatch):
+    client, module, _ = local_client
+    monkeypatch.setattr(module.studio.voices, 'ready', lambda: True)
+    response = client.post('/api/import-upload', params={'filename':'test.mp4',
+        'participants':'Alice; Karim', 'diarize':True, 'speaker_count':2}, content=b'test-audio')
+    assert response.status_code == 200
+    meeting = response.json()
+    assert meeting['participants'] == ['Alice','Karim']
+    assert meeting['diarize'] and meeting['speaker_count'] == 2
+    assert client.post('/api/import-upload', params={'filename':'test.mp4','speaker_count':99},content=b'x').status_code == 422

@@ -8,6 +8,8 @@
 /.imports/
 /settings.json
 /model-checksums.json
+/catalog-cache.json
+/catalog-cache.tmp
 
 # Local reports and screenshots may contain meeting content or machine details
 /LIRE-MOI.md

@@ -4,7 +4,9 @@ import hashlib
 import json
 import shutil
 import threading
+import time
 import requests
+from discovery import discover, validate_cached
 
 
 class ModelCatalog:
@@ -16,6 +18,20 @@ class ModelCatalog:
         self.cancelled = threading.Event()
         self.thread = None
         self.download = None
+        self.refresh_thread = None
+        self.scheduler = None
+        self.closed = threading.Event()
+        self.refreshing = {'status': 'idle', 'checked_at': None, 'message': 'Catalogue initial disponible.'}
+        try:
+            cache = json.loads((self.root / 'catalog-cache.json').read_text(encoding='utf-8'))
+            for item in cache.get('models', [])[:2000]:
+                entry = validate_cached(item)
+                if entry and entry['id'] not in self.entries:
+                    self.entries[entry['id']] = entry
+            self.refreshing['checked_at'] = cache.get('checked_at')
+            self.refreshing['message'] = 'Catalogue local chargé.'
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
         try:
             self.preferred = json.loads((self.root / 'settings.json').read_text(encoding='utf-8'))['llm_model']
         except (OSError, ValueError, KeyError):
@@ -26,6 +42,71 @@ class ModelCatalog:
             self.execution = 'auto'
         if self.execution not in ('auto', 'cpu', 'gpu'):
             self.execution = 'auto'
+        try:
+            self.auto_catalog = json.loads((self.root / 'settings.json').read_text(encoding='utf-8')).get('auto_catalog', True) is True
+        except (OSError, ValueError):
+            self.auto_catalog = True
+
+    def set_auto_catalog(self, enabled):
+        with self.lock:
+            self._save_setting('auto_catalog', bool(enabled))
+            self.auto_catalog = bool(enabled)
+
+    def start_scheduler(self):
+        with self.lock:
+            if self.scheduler and self.scheduler.is_alive():
+                return
+            self.scheduler = threading.Thread(target=self._schedule, daemon=True)
+            self.scheduler.start()
+
+    def _schedule(self):
+        while not self.closed.is_set():
+            checked = self.refreshing.get('checked_at')
+            if self.auto_catalog and (not isinstance(checked, (int, float)) or time.time() - checked >= 86400):
+                self.start_refresh()
+            if self.closed.wait(3600):
+                break
+
+    def start_refresh(self):
+        with self.lock:
+            if self.refresh_thread and self.refresh_thread.is_alive():
+                return {'ok': True, 'refreshing': True}
+            self.refreshing.update(status='refreshing', message='Connexion au catalogue Hugging Face…')
+            self.refresh_thread = threading.Thread(target=self._refresh, daemon=True)
+            self.refresh_thread.start()
+            return {'ok': True}
+
+    def _refresh_progress(self, message):
+        with self.lock:
+            self.refreshing['message'] = message
+
+    def _refresh(self):
+        try:
+            with self.lock:
+                known = {(e['repo'], e.get('source_filename', e['filename']))
+                         for mid, e in self.entries.items() if not e.get('dynamic') or self.installed(mid)}
+            found, warnings = discover(known, self.closed, self._refresh_progress)
+            if self.closed.is_set():
+                return
+            with self.lock:
+                entries = {mid: dict(e) for mid, e in self.entries.items()}
+                for entry in entries.values():
+                    if entry.get('dynamic') and not warnings:
+                        entry['visible'] = False
+                for entry in found:
+                    entries[entry['id']] = {**entry, 'visible': True}
+                checked = time.time()
+                cache = {'checked_at': checked, 'models': [e for e in entries.values() if e.get('dynamic')]}
+                tmp = self.root / 'catalog-cache.tmp'
+                tmp.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding='utf-8')
+                tmp.replace(self.root / 'catalog-cache.json')
+                self.entries = entries
+                self.refreshing.update(status='done', checked_at=checked, count=len(found),
+                    message=f'{len(found)} modèle(s) découvert(s). ' +
+                    ('Certaines sources n’ont pas répondu ; nouvel essai disponible.' if warnings else 'Catalogue à jour.'))
+        except Exception:
+            with self.lock:
+                self.refreshing.update(status='error', message='Actualisation indisponible. Le catalogue local reste accessible ; réessayez avec Internet.')
 
     def resolve_execution(self, execution=None):
         value = execution or self.execution
@@ -90,11 +171,13 @@ class ModelCatalog:
         with self.lock:
             models = []
             for mid, entry in self.entries.items():
-                if entry.get('legacy'):
+                if entry.get('legacy') or (entry.get('visible') is False and not self.installed(mid)
+                                          and not self.partial_size(mid) and mid != self.preferred):
                     continue
                 models.append({**entry, 'installed': self.installed(mid),
                                'partial_bytes': self.partial_size(mid)})
             return {'models': models, 'default': self.default(), 'execution': self.execution,
+                    'auto_catalog': self.auto_catalog, 'refresh': dict(self.refreshing),
                     'download': dict(self.download) if self.download else None}
 
     def update(self, **values):
@@ -137,7 +220,7 @@ class ModelCatalog:
             if shutil.disk_usage(target.parent).free < entry['size'] - offset + 100 * 1024 * 1024:
                 raise RuntimeError('Espace disque insuffisant pour ce modèle.')
             if offset < entry['size']:
-                url = f"https://huggingface.co/{entry['repo']}/resolve/{entry['revision']}/{entry['filename']}"
+                url = f"https://huggingface.co/{entry['repo']}/resolve/{entry['revision']}/{entry.get('source_filename', entry['filename'])}"
                 headers = {'User-Agent': 'Clair-local/1.1'}
                 if offset:
                     headers['Range'] = f'bytes={offset}-'
@@ -182,3 +265,4 @@ class ModelCatalog:
 
     def close(self):
         self.cancelled.set()
+        self.closed.set()

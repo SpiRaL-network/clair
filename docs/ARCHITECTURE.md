@@ -10,6 +10,8 @@ traitements audio/LLM dans des threads. Aucun service d'inférence tiers n'est r
 | `app.py` | Routes locales, session/jeton, import en flux, contrôle des tâches et capture |
 | `core.py` | Stockage des réunions, extraction audio, Whisper, capture et génération des rapports |
 | `catalog.py` | Installation et reprise des GGUF, contrôle d'intégrité et préférences |
+| `discovery.py` | Découverte Hugging Face, licences et validation stricte des métadonnées |
+| `voices.py` | Modèles ONNX vérifiés, séparation CPU et alignement conservateur par mot |
 | `models-catalog.json` | Catalogue, révisions fixées, tailles et SHA-256 des fichiers |
 | `prepare.py` | Téléchargement des composants et modèles initiaux |
 | `launch.py`, `Lancer.cmd` | Démarrage local et diagnostics |
@@ -22,7 +24,9 @@ traitements audio/LLM dans des threads. Aucun service d'inférence tiers n'est r
 Média importé ou capture PC + micro
   -> extraction / assemblage audio 16 kHz
   -> Whisper large-v3 (CPU int8 ou GPU float16)
-  -> segments horodatés + TXT/SRT
+  -> mots horodatés + segments
+  -> segmentation et regroupement des voix (optionnel, CPU)
+  -> découpage aux changements de voix + TXT/SRT
   -> découpage de la transcription
   -> rapports intermédiaires JSON avec le GGUF sélectionné
   -> consolidation du compte rendu
@@ -62,17 +66,58 @@ sur un réseau ou derrière un serveur public.
 
 ## Mise à jour du catalogue
 
-Pour ajouter une entrée, vérifier la fiche du modèle et sa compatibilité avec
-le moteur, puis renseigner dans `models-catalog.json` : identifiant stable, nom,
-fichier GGUF unique, dépôt, révision, taille exacte, SHA-256 publié et date de
-sortie vérifiée. Ne pas utiliser la date de mise à jour de la quantification
-comme date de sortie du modèle original. Le code ne permet pas à une requête API
-de fournir une URL arbitraire de téléchargement.
+Le fichier `models-catalog.json` reste un catalogue initial fixé et disponible
+hors ligne. Un thread démarré par le cycle de vie FastAPI consulte les API
+publiques Hugging Face chaque jour ; le bouton d’actualisation utilise le même
+mécanisme. Les requêtes n’incluent aucun contenu ou nom de réunion. Les réponses
+JSON sont limitées à 4 Mo et la recherche aux trois éditeurs autorisés, avec
+limites de durée, de nombre de candidats et de nouveaux modèles.
 
-`legacy: true` conserve une entrée pour les anciennes réunions sans la montrer
-dans le catalogue. Pour les modèles capables de raisonnement, `no_thinking: true`
-active le mode de réponse directe du moteur. Valider réellement une sortie JSON
-avec le modèle avant de le considérer comme testé.
+La découverte filtre les dépôts publics non restreints, les usages de génération
+textuelle et les licences Apache 2.0, MIT, BSD 2/3 clauses, CC0 et CC BY 4.0.
+Elle exige un GGUF Q4_K_M unique entre 0,5 et 20 Go, une révision SHA de 40 caractères
+et une empreinte LFS SHA-256 de 64 caractères. Les chemins de fichiers ne peuvent
+pas contenir de répertoires. Le stockage ajoute un préfixe dérivé du dépôt, de
+la révision et du nom source pour éviter les collisions entre éditeurs.
+
+Le cache `catalog-cache.json` est écrit atomiquement et validé à la lecture.
+Il conserve les anciennes entrées pour résoudre les choix des réunions
+existantes ; les entrées anciennes non installées peuvent disparaître de
+l’affichage. Les fichiers installés et partiels restent visibles. Une panne
+réseau conserve le cache précédent ; un échec partiel conserve les entrées
+visibles des sources indisponibles. La découverte ne change ni le défaut ni
+les poids installés. La date découverte est celle de création du dépôt GGUF,
+pas une prétendue date de sortie du modèle original. La compatibilité et la
+qualité ne sont pas prouvées par une empreinte valide.
+
+## Séparation des voix et attributions
+
+sherpa-onnx 1.13.8 exécute sur CPU la segmentation Pyannote 3.0 et un extracteur
+ERes2Net 3D-Speaker entraîné sur VoxCeleb. Les conversions ONNX proviennent des
+releases officielles sherpa-onnx ; tailles et SHA-256 sont fixés dans `voices.py`
+et contrôlés avant installation puis avant analyse. L’archive est lue pour un
+seul membre connu sans extraction de chemins sur le disque.
+
+La diarisation produit des plages de parole et des groupes anonymes, ordonnés
+par première apparition. Le nombre de groupes peut être estimé ou imposé. Le seuil de regroupement
+automatique est fixé à 0,9 pour limiter la fragmentation observée sur un
+enregistrement long ; ce réglage peut aussi fusionner des voix proches.
+Les mots Whisper sont attribués par chevauchement temporel : couverture du
+groupe dominant d’au moins 55 %, second groupe inférieur à 25 %. Ces seuils
+sont des heuristiques, pas des scores de confiance calibrés. Les passages
+ambigus restent non attribués ; une transcription ancienne sans mots conserve
+son découpage de paragraphes. Les nouvelles transcriptions gardent leurs mots
+pour que la réanalyse puisse refaire le découpage.
+
+L’utilisateur associe une voix à un prénom déclaré. La correspondance s’applique
+aux segments qui ne portent pas une correction manuelle. Les corrections et
+le retrait explicite d’une attribution sont prioritaires. Noms, segments et
+exports sont mis à jour localement. Les changements marquent le rapport existant
+comme obsolète sans le modifier ; la régénération enregistre un nouvel instantané
+de participants. Les prompts distinguent prénoms déclarés, correspondances
+confirmées et étiquettes automatiques sans identité. Aucun nom n’est déduit d’un
+visage, de la voix seule ou de l’ordre des participants. Aucun profil vocal
+persistant n’est calculé pour identifier quelqu’un dans une autre réunion.
 
 ## Installation et maintenance
 

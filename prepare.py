@@ -75,9 +75,21 @@ def runtime():
     (dest / 'python312._pth').write_text('python312.zip\n.\n..\n../.venv/Lib/site-packages\nimport site\n', encoding='utf-8')
     print('Standalone Python runtime ready', flush=True)
 
+def voice_models():
+    import time
+    from voices import VoiceEngine
+    voice = VoiceEngine(ROOT)
+    voice.start_install()
+    while voice.thread and voice.thread.is_alive():
+        print(voice.state()['download'], flush=True)
+        time.sleep(1)
+    if not voice.ready() or voice.download['status'] != 'done':
+        raise RuntimeError(voice.download['message'])
+    print('Local speaker diarization ready', flush=True)
+
 if __name__ == '__main__':
     with ThreadPoolExecutor(max_workers=3) as pool:
-        for result in pool.map(lambda f: f(), [whisper, summary, engine, runtime]):
+        for result in pool.map(lambda f: f(), [whisper, summary, engine, runtime, voice_models]):
             pass
     files = [p for p in MODELS.rglob('*') if p.is_file() and '.cache' not in p.parts]
     manifest = {}

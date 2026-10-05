@@ -12,8 +12,12 @@ enregistrer le son du PC et le microphone pour traiter une réunion après son a
   selon les codecs. Sélecteur du navigateur ou chemin de fichier local.
 - Transcription horodatée, recherche, lecture audio et exports TXT/SRT.
 - Compte rendu : sujets, décisions, propositions, actions et questions ouvertes.
-- Catalogue de sept modèles publiés en 2026 : Qwen3.5 2B/4B/9B, Qwen3.8 27B,
-  Gemma 4 E2B/E4B/12B. Téléchargements reprenables avec vérification SHA-256.
+- Catalogue dynamique : actualisation quotidienne depuis Hugging Face, bouton
+  d’actualisation, recherche et cache hors ligne. Sept modèles initiaux de 2026.
+  Nouveautés à licence ouverte, GGUF Q4_K_M ; téléchargements à la demande avec SHA-256.
+- Séparation locale des voix sur CPU, extraits à écouter, association aux prénoms,
+  corrections par passage et prise en compte dans le prochain compte rendu.
+- Thèmes clair, sombre et système ; préférence conservée dans le navigateur.
 - Choix du modèle par réunion ; régénération du résumé sans retranscription.
 - Traitement automatique, GPU NVIDIA, ou CPU uniquement.
 - Capture WASAPI du son du PC et du microphone en pistes séparées.
@@ -37,17 +41,23 @@ cd clair
 
 `Installer.cmd` crée un environnement Python, installe les versions fixées dans
 `requirements.lock.txt`, télécharge Whisper large-v3 et Qwen3.5 4B, puis les moteurs
-llama.cpp CPU/GPU et un runtime Python autonome. Aucun modèle ni binaire tiers
+llama.cpp CPU/GPU, les deux petits modèles de voix et un runtime Python autonome. Aucun modèle ni binaire tiers
 n'est inclus dans ce dépôt. `Lancer.cmd` utilise ensuite le runtime local.
 
 Le catalogue s'ouvre dans le menu **Catalogue de modèles**. Les modèles supplémentaires
-se téléchargent à la demande. Le catalogue est vérifié au **5 octobre 2026** ; les
-révisions et empreintes des fichiers sont fixées dans `models-catalog.json`.
+se téléchargent à la demande. Le catalogue consulte les dépôts publics Unsloth,
+bartowski et LM Studio Community une fois par jour pendant que Clair est ouvert.
+Aucun modèle n’est téléchargé ou sélectionné automatiquement. Désactiver
+**Actualiser automatiquement chaque jour** pour conserver un usage hors ligne.
+Les modèles installés, leurs révisions et le modèle par défaut sont conservés.
+Les nouveautés indiquent leur date d’ajout au dépôt, leur licence et leur fiche ;
+leur qualité et leur compatibilité ne sont pas garanties par la découverte.
 
 ## Utilisation
 
 1. Choisir **Importer un enregistrement** ou **Enregistrer une réunion**.
-2. Choisir la langue, le modèle du compte rendu et le mode CPU/GPU.
+2. Choisir la langue, le modèle, le mode CPU/GPU et éventuellement les participants
+   et la séparation des voix.
 3. Importer le média, ou sélectionner les périphériques audio utilisés par Teams
    puis démarrer la capture manuellement.
 4. Consulter la transcription et le compte rendu ; exporter ou réécouter les passages.
@@ -57,8 +67,13 @@ Pour changer de modèle après traitement, choisir **Modèle pour le prochain r�
 puis **Refaire le résumé**. Le modèle du rapport actuel reste indiqué jusqu'au
 remplacement effectif du compte rendu.
 
+Après détection, ouvrir **Participants et voix**, écouter les extraits et associer
+chaque voix à un prénom déclaré. Vérifier les passages, puis cliquer sur
+**Refaire le résumé**. Les passages ambigus restent non attribués.
+Le sélecteur en haut à droite propose le thème sombre.
+
 Les données sont stockées dans `reunions/`, les modèles dans `models/`, les
-préférences dans `settings.json`. Ces fichiers sont exclus de Git.
+préférences dans `settings.json`, le catalogue découvert dans `catalog-cache.json`. Ces fichiers sont exclus de Git.
 
 ## Développement et tests
 
@@ -69,7 +84,7 @@ Après installation des dépendances :
 .\.venv\Scripts\python.exe app.py --no-browser
 ```
 
-Les **14 tests** s'exécutent sans télécharger de modèles, sans GPU et sans capturer
+Les **41 tests** s'exécutent sans télécharger de modèles, sans GPU et sans capturer
 de périphériques. Les tests d'inférence utilisent des substituts ; les essais réels
 CPU/GPU sont documentés dans [docs/VALIDATION.md](docs/VALIDATION.md).
 Le workflow GitHub Actions vérifie les sources et les tests sur Windows.
@@ -77,9 +92,15 @@ Le workflow GitHub Actions vérifie les sources et les tests sur Windows.
 ## Limites
 
 La capture démarre manuellement, et la transcription s'effectue après son arrêt.
-Clair n'identifie pas les intervenants et ne réalise pas de diarisation.
+La diarisation sépare les voix ; le nom est confirmé par l’utilisateur après écoute.
+Clair n’identifie pas les personnes à partir de leur visage et ne mémorise pas
+de profils vocaux entre les réunions. Les voix simultanées, le bruit et les
+repères de mots imprécis peuvent laisser des passages non attribués. Les
+anciennes transcriptions sans repères de mots nécessitent une retranscription
+pour découper les passages contenant plusieurs personnes.
 Les résumés peuvent comporter des erreurs : vérifier les noms, chiffres et engagements.
-Les sept modèles n'ont pas tous été évalués sur le même matériel. Les tailles de
+Tous les modèles initiaux et découverts n’ont pas été évalués sur le même matériel.
+Une nouvelle architecture GGUF peut nécessiter une version plus récente du moteur. Les tailles de
 mémoire indiquées sont des estimations ; un grand modèle peut partager GPU et RAM.
 
 ## Documentation et licence

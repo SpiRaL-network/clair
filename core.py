@@ -26,6 +26,7 @@ import numpy as np
 import requests
 from pydantic import BaseModel, Field
 from catalog import ModelCatalog
+from voices import VoiceEngine, split_at_voice_changes
 
 def stamp(seconds: float) -> str:
     seconds = max(0, int(seconds))
@@ -34,7 +35,7 @@ def stamp(seconds: float) -> str:
 def chunks(segments, limit=6500):
     part, size = [], 0
     for s in segments:
-        line = f'[{stamp(s["start"])}] {s["text"]}'
+        line = f'[{stamp(s["start"])}] {segment_text(s)}'
         if part and size + len(line) > limit:
             yield '\n'.join(part)
             part, size = [], 0
@@ -42,6 +43,22 @@ def chunks(segments, limit=6500):
         size += len(line) + 1
     if part:
         yield '\n'.join(part)
+
+def participant_names(value):
+    if isinstance(value, str):
+        value = re.split(r'[,;\n]', value)
+    if not isinstance(value, list) or any(not isinstance(name, str) for name in value):
+        raise ValueError('Indiquez les prénoms, séparés par des virgules.')
+    names = list(dict.fromkeys(name.strip() for name in value if name.strip()))
+    if len(names) > 30 or any(len(name) > 80 or any(ord(c) < 32 for c in name) for name in names):
+        raise ValueError('Maximum 30 participants, avec 80 caractères par nom.')
+    return names
+
+def segment_text(segment):
+    name = segment.get('speaker')
+    if not name and segment.get('voice'):
+        name = 'Voix ' + segment['voice'].split('-')[-1] + ' (non confirmée)'
+    return (name + ' : ' if name else '') + segment['text']
 
 class Decision(BaseModel):
     text: str
@@ -71,6 +88,8 @@ class Report(BaseModel):
 def markdown_report(report: dict) -> str:
     r = Report.model_validate(report)
     out = [f'# {r.title}', '', r.overview, '', '## Sujets abordés', '']
+    if report.get('participants'):
+        out[4:4] = ['Participants déclarés : ' + ', '.join(report['participants']), '']
     for topic in r.topics:
         out += [f'### {topic.title}', ''] + [f'- {point}' for point in topic.points] + ['']
     out += ['## Décisions', '']
@@ -168,6 +187,11 @@ class LocalLLM:
             'Ne crée des actions que si elles sont explicites. Une démonstration, un exemple ou une question '
             'ne constitue pas une action assignée. '
             'N’attribue pas une action à une personne sans preuve; écris Non précisé. '
+            'La liste des participants déclarés est un contexte fourni par l’utilisateur, jamais une preuve '
+            'de présence ou d’identité vocale. Seuls les passages portant un prénom ont été attribués '
+            'manuellement par l’utilisateur. Les mentions Voix N (non confirmée) sont des estimations '
+            'automatiques et ne permettent pas d’attribuer une action à un prénom. '
+            'Un passage sans prénom reste sans intervenant identifié. '
             'Une échéance absente vaut Non précisée. Une date relative reste telle que prononcée. '
             'Reprends uniquement des horodatages présents dans la source. Pour chaque décision, proposition et '
             'action, quote doit citer exactement un court passage ORIGINAL (sans traduction) qui justifie cet élément. '
@@ -350,13 +374,14 @@ class Studio:
         self.active = None
         self.cancelled = threading.Event()
         self.catalog = ModelCatalog(ROOT)
+        self.voices = VoiceEngine(ROOT)
         self.llm = LocalLLM(self.catalog)
         self.recorder = Recorder()
         self.recording_id = None
         for p in DATA.glob('*/meeting.json'):
             try:
                 m = json.loads(p.read_text(encoding='utf-8'))
-                if m['status'] in ('queued', 'transcribing', 'summarizing', 'recording', 'preparing'):
+                if m['status'] in ('queued', 'transcribing', 'summarizing', 'diarizing', 'recording', 'preparing'):
                     m.update(status='interrupted', message='Traitement interrompu. Tu peux le relancer.')
                     self.save(m)
             except (ValueError, KeyError):
@@ -392,21 +417,141 @@ class Studio:
             for p in DATA.glob('*/meeting.json'):
                 try:
                     m = json.loads(p.read_text(encoding='utf-8'))
-                    result.append({k: v for k, v in m.items() if k not in ('segments', 'report')})
+                    result.append({k: v for k, v in m.items() if k not in ('segments', 'report', 'voice_turns')})
                 except ValueError:
                     pass
             return sorted(result, key=lambda m: m['created'], reverse=True)
 
-    def create(self, title, source, language='auto', context='', auto_summary=True, llm_model=None, execution=None):
+    def create(self, title, source, language='auto', context='', auto_summary=True, llm_model=None, execution=None, participants='', diarize=False, speaker_count=0):
+        participants = participant_names(participants)
+        if not isinstance(speaker_count, int) or not 0 <= speaker_count <= 30:
+            raise ValueError('Indiquez de 1 à 30 voix, ou 0 pour une détection automatique.')
+        if diarize and not self.voices.ready():
+            raise ValueError('Installez les modèles de voix depuis le catalogue, ou désactivez la détection des voix.')
         llm_model = self.catalog.resolve(llm_model, require_installed=auto_summary)
         execution = self.catalog.resolve_execution(execution)
         mid = secrets.token_hex(8)
         m = {'id': mid, 'title': title[:160] or 'Nouvelle réunion', 'source': str(source),
              'created': time.time(), 'status': 'queued', 'progress': 0,
              'message': 'En attente', 'language': language, 'context': context[:3000],
-             'auto_summary': auto_summary, 'llm_model': llm_model, 'execution': execution, 'duration': 0, 'segments': [], 'report': None}
+             'auto_summary': auto_summary, 'llm_model': llm_model, 'execution': execution,
+             'participants': participants, 'diarize': diarize, 'speaker_count': speaker_count,
+             'voices': [], 'voice_turns': [], 'duration': 0, 'segments': [], 'report': None}
         self.save(m)
         return m
+
+    def set_participants(self, mid, participants):
+        names = participant_names(participants)
+        with self.lock:
+            if self.active or self.recorder.streams:
+                raise RuntimeError('Attendez la fin du traitement ou de l’enregistrement pour modifier les participants.')
+            m = self.read(mid)
+            if names == m.get('participants', []):
+                return m
+            for segment in m['segments']:
+                if segment.get('speaker') and segment['speaker'] not in names:
+                    segment.pop('speaker')
+                    segment.pop('speaker_manual', None)
+            for voice in m.get('voices', []):
+                if voice.get('name') not in names:
+                    voice['name'] = ''
+            m.update(participants=names, report_stale=bool(m.get('report')))
+            self.save(m)
+            self.write_transcript(mid)
+            return m
+
+    def set_speaker(self, mid, index, start, speaker):
+        with self.lock:
+            if self.active or self.recorder.streams:
+                raise RuntimeError('Attendez la fin du traitement ou de l’enregistrement pour attribuer les passages.')
+            m = self.read(mid)
+            if index < 0 or index >= len(m['segments']) or m['segments'][index]['start'] != start:
+                raise ValueError('Ce passage a changé. Actualisez la transcription.')
+            if speaker and speaker not in m.get('participants', []):
+                raise ValueError('Ajoutez ce prénom dans les participants avant de l’utiliser.')
+            segment = m['segments'][index]
+            if segment.get('speaker', '') == speaker:
+                return m
+            if speaker:
+                segment['speaker'] = speaker
+                segment['speaker_manual'] = True
+            else:
+                segment.pop('speaker', None)
+                # Explicitly unassigned: future voice mappings must preserve this correction.
+                segment['speaker_manual'] = True
+            m['report_stale'] = bool(m.get('report'))
+            self.save(m)
+            self.write_transcript(mid)
+            return m
+
+    def name_voice(self, mid, voice_id, name):
+        with self.lock:
+            if self.active or self.recorder.streams:
+                raise RuntimeError('Attendez la fin du traitement ou de l’enregistrement pour nommer les voix.')
+            m = self.read(mid)
+            voice = next((v for v in m.get('voices', []) if v['id'] == voice_id), None)
+            if voice is None:
+                raise ValueError('Voix inconnue. Relancez la détection si nécessaire.')
+            if name and name not in m.get('participants', []):
+                raise ValueError('Ajoutez ce prénom aux participants avant de nommer cette voix.')
+            if voice.get('name', '') == name:
+                return m
+            voice['name'] = name
+            for segment in m['segments']:
+                if segment.get('voice') == voice_id and not segment.get('speaker_manual'):
+                    if name:
+                        segment['speaker'] = name
+                    else:
+                        segment.pop('speaker', None)
+            m['report_stale'] = bool(m.get('report'))
+            self.save(m)
+            self.write_transcript(mid)
+            return m
+
+    def launch_diarization(self, mid, speaker_count=0):
+        with self.lock:
+            if self.active or self.recorder.streams:
+                raise RuntimeError('Un traitement ou un enregistrement est déjà en cours.')
+            m = self.read(mid)
+            if not m['segments'] or not (self.folder(mid) / 'audio.wav').is_file():
+                raise ValueError('La transcription et l’audio sont nécessaires pour détecter les voix.')
+            if not self.voices.ready():
+                raise ValueError('Installez les modèles de voix dans le catalogue.')
+            if not isinstance(speaker_count, int) or not 0 <= speaker_count <= 30:
+                raise ValueError('Nombre de voix invalide.')
+            self.update(mid, speaker_count=speaker_count)
+            self.active = mid
+            self.cancelled.clear()
+            threading.Thread(target=self._run_diarization, args=(mid,), daemon=True).start()
+
+    def _run_diarization(self, mid):
+        try:
+            self.llm.stop()
+            self.diarize(mid)
+            self.update(mid, status='done', progress=100, message='Voix détectées. Écoutez les extraits puis associez les prénoms.')
+        except Cancelled:
+            self.update(mid, status='cancelled', message='Détection annulée. Les attributions précédentes sont conservées.')
+        except Exception as error:
+            self.update(mid, status='error', message=str(error)[:600])
+        finally:
+            with self.lock:
+                self.active = None
+
+    def diarize(self, mid):
+        from faster_whisper.audio import decode_audio
+        m = self.read(mid)
+        self.update(mid, status='diarizing', progress=79, message='Analyse locale des voix sur CPU…')
+        audio = decode_audio(str(self.folder(mid) / 'audio.wav'), sampling_rate=16000)
+        started = time.time()
+        turns, detected = self.voices.analyze(audio, m.get('speaker_count', 0), self.cancelled,
+            lambda ratio: self.update(mid, message=f'Analyse des voix · {round(ratio * 100)} %'))
+        self.check()
+        if not detected:
+            raise RuntimeError('Aucune voix détectée. Vérifiez l’audio ; la transcription précédente est conservée.')
+        segments = split_at_voice_changes(m['segments'], turns)
+        self.update(mid, segments=segments, voices=detected, voice_turns=turns,
+                    diarization_seconds=round(time.time() - started, 1), report_stale=bool(m.get('report')))
+        self.write_transcript(mid)
 
     def launch(self, mid, summary_only=False, mix=False, llm_model=None, execution=None):
         with self.lock:
@@ -438,7 +583,7 @@ class Studio:
             m = self.read(mid)
             if not summary_only:
                 self.llm.stop()
-                self.update(mid, segments=[], report=None)
+                self.update(mid, segments=[], report=None, voices=[], voice_turns=[], report_stale=False)
                 for name in ('transcription.txt', 'sous-titres.srt', 'compte-rendu.md', 'compte-rendu.json'):
                     (self.folder(mid) / name).unlink(missing_ok=True)
                 if mix:
@@ -471,14 +616,16 @@ class Studio:
                                      compute_type='float16' if device == 'cuda' else 'int8',
                                      cpu_threads=8, local_files_only=True)
                 segments, info = model.transcribe(audio, language=m['language'] if m['language'] != 'auto' else None,
-                                                 beam_size=5, vad_filter=True,
+                                                 beam_size=5, vad_filter=True, word_timestamps=True,
                                                  vad_parameters={'min_silence_duration_ms': 500},
                                                  initial_prompt=m['context'] or None,
                                                  condition_on_previous_text=False)
                 collected = []
                 for s in segments:
                     self.check()
-                    collected.append({'start': round(s.start, 2), 'end': round(s.end, 2), 'text': s.text.strip()})
+                    collected.append({'start': round(s.start, 2), 'end': round(s.end, 2), 'text': s.text.strip(),
+                                      'words': [{'start': round(w.start, 3), 'end': round(w.end, 3), 'word': w.word}
+                                                for w in (s.words or [])]})
                     self.update(mid, segments=collected, progress=min(78, 5 + 73 * s.end / duration),
                                 message=f'Transcription · {stamp(s.end)} / {stamp(duration)}')
                 model = None
@@ -490,13 +637,16 @@ class Studio:
                 self.write_transcript(mid)
                 if not collected:
                     raise RuntimeError('Aucune parole détectée. Vérifie les sources audio et le volume.')
+                if m.get('diarize'):
+                    self.diarize(mid)
             m = self.read(mid)
             if summary_only or m['auto_summary']:
                 summary_started = time.time()
                 self.summarize(mid)
                 self.update(mid, summary_seconds=round(time.time() - summary_started))
             result = self.read(mid)
-            elapsed = result.get('transcription_seconds', 0) + result.get('summary_seconds', 0)
+            elapsed = (result.get('transcription_seconds', 0) + result.get('diarization_seconds', 0)
+                       + result.get('summary_seconds', 0))
             self.update(mid, status='done', progress=100, message='Terminé', processing_seconds=elapsed)
         except Cancelled:
             self.write_transcript(mid)
@@ -519,12 +669,12 @@ class Studio:
         if not m['segments']:
             return
         folder = self.folder(mid)
-        text = '\n'.join(f'[{stamp(s["start"])}] {s["text"]}' for s in m['segments'])
+        text = '\n'.join(f'[{stamp(s["start"])}] {segment_text(s)}' for s in m['segments'])
         (folder / 'transcription.txt').write_text(text, encoding='utf-8')
         def srt_time(sec):
             ms = int(round(sec * 1000))
             return stamp(ms // 1000) + f',{ms % 1000:03d}'
-        srt = '\n\n'.join(f'{i}\n{srt_time(s["start"])} --> {srt_time(s["end"])}\n{s["text"]}'
+        srt = '\n\n'.join(f'{i}\n{srt_time(s["start"])} --> {srt_time(s["end"])}\n{segment_text(s)}'
                             for i, s in enumerate(m['segments'], 1))
         (folder / 'sous-titres.srt').write_text(srt, encoding='utf-8')
 
@@ -541,7 +691,9 @@ class Studio:
             self.check()
             self.update(mid, status='summarizing', progress=80 + 14 * i / len(parts),
                         message=f'Compte rendu local · partie {i + 1} / {len(parts)}…')
-            notes.append(self.llm.ask(part, self.cancelled))
+            context = ('Participants déclarés (contexte, pas une attribution des voix) : ' +
+                       json.dumps(m.get('participants', []), ensure_ascii=False) + '\n\n')
+            notes.append(self.llm.ask(context + part, self.cancelled))
         while len(notes) > 1:
             self.update(mid, message='Consolidation du compte rendu…', progress=96)
             groups, group, size = [], [], 0
@@ -584,15 +736,17 @@ class Studio:
         self.check()
         report['model'] = {'id': self.llm.model_id, 'name': self.catalog.entry(self.llm.model_id)['name']}
         report['model']['execution'] = self.llm.device
-        self.update(mid, report=report, report_model=self.llm.model_id, summary_device=self.llm.device)
+        report['participants'] = m.get('participants', [])
+        self.update(mid, report=report, report_model=self.llm.model_id, summary_device=self.llm.device, report_stale=False)
         (self.folder(mid) / 'compte-rendu.md').write_text(markdown_report(report) + '\n\nModèle : ' + report['model']['name'], encoding='utf-8')
         (self.folder(mid) / 'compte-rendu.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
 
-    def start_recording(self, title, system_id, mic_id, language='auto', context='', llm_model=None, execution=None):
+    def start_recording(self, title, system_id, mic_id, language='auto', context='', llm_model=None, execution=None, participants='', diarize=False, speaker_count=0):
         with self.lock:
             if self.active or self.recorder.streams:
                 raise RuntimeError('Un traitement ou un enregistrement est déjà en cours.')
-            m = self.create(title, '', language, context, llm_model=llm_model, execution=execution)
+            m = self.create(title, '', language, context, llm_model=llm_model, execution=execution,
+                            participants=participants, diarize=diarize, speaker_count=speaker_count)
             try:
                 self.recorder.start(self.folder(m['id']), system_id, mic_id)
             except Exception as e:
@@ -615,5 +769,6 @@ class Studio:
     def close(self):
         self.cancelled.set()
         self.catalog.close()
+        self.voices.close()
         self.recorder.stop()
         self.llm.stop()

@@ -5,6 +5,7 @@ import secrets
 import threading
 import time
 import webbrowser
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, HTTPException, Query
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
@@ -14,7 +15,14 @@ from core import ROOT, Studio
 PORT = 8787
 TOKEN = secrets.token_urlsafe(32)
 studio = Studio()
-app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+@asynccontextmanager
+async def lifespan(app):
+    studio.catalog.start_scheduler()
+    yield
+    studio.close()
+
+app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 
 @app.middleware('http')
 async def local_only(request: Request, call_next):
@@ -66,12 +74,26 @@ def stylesheet():
 def state():
     return {'meetings': studio.listing(), 'active': studio.active, 'recording': studio.recorder.state(),
             'catalog': studio.catalog.state(),
+            'voice_engine': studio.voices.state(),
             'models_ready': (ROOT / 'models/whisper-large-v3/model.bin').exists()
                              and any(studio.catalog.installed(mid) for mid in studio.catalog.entries)}
 
 @app.get('/api/models')
 def models():
     return studio.catalog.state()
+
+@app.post('/api/models/refresh')
+def refresh_models():
+    return studio.catalog.start_refresh()
+
+@app.post('/api/voices/install')
+def install_voices():
+    return studio.voices.start_install()
+
+@app.post('/api/voices/install/cancel')
+def cancel_voice_install():
+    studio.voices.cancelled.set()
+    return {'ok': True}
 
 @app.post('/api/models/{model_id}/download')
 def download_model(model_id: str):
@@ -88,11 +110,17 @@ def default_model(model_id: str):
     return {'ok': True}
 
 class ExecutionRequest(BaseModel):
-    execution: str
+    execution: str | None = None
+    auto_catalog: bool | None = None
 
 @app.post('/api/preferences')
 def preferences(body: ExecutionRequest):
-    studio.catalog.set_execution(body.execution)
+    if body.execution is not None:
+        studio.catalog.set_execution(body.execution)
+    if body.auto_catalog is not None:
+        studio.catalog.set_auto_catalog(body.auto_catalog)
+        if body.auto_catalog:
+            studio.catalog.start_refresh()
     return {'ok': True}
 
 @app.get('/api/devices')
@@ -106,7 +134,8 @@ MEDIA_SUFFIXES = {'.mp4', '.mkv', '.mov', '.webm', '.avi', '.mp3', '.wav', '.m4a
 async def import_upload(request: Request, filename: str = Query(max_length=255),
                         title: str = Query(default='', max_length=160), language: str = 'auto',
                         context: str = Query(default='', max_length=3000), auto_summary: bool = True,
-                        llm_model: str = '', execution: str = ''):
+                        llm_model: str = '', execution: str = '', participants: str = Query(default='', max_length=3000),
+                        diarize: bool = False, speaker_count: int = Query(default=0, ge=0, le=30)):
     # Browser-selected files are copied over loopback in chunks, never loaded wholly into RAM.
     filename = Path(filename.replace('\\', '/')).name
     suffix = Path(filename).suffix.lower()
@@ -133,7 +162,8 @@ async def import_upload(request: Request, filename: str = Query(max_length=255),
         with studio.lock:
             if studio.active or studio.recorder.streams:
                 raise RuntimeError('Un traitement ou un enregistrement est déjà en cours.')
-            m = studio.create(title or Path(filename).stem, path, language, context, auto_summary, llm_model, execution)
+            m = studio.create(title or Path(filename).stem, path, language, context, auto_summary, llm_model,
+                              execution, participants, diarize, speaker_count)
             source = studio.folder(m['id']) / ('source' + suffix)
             path.replace(source)
             m = studio.update(m['id'], source=str(source))
@@ -152,6 +182,9 @@ class ImportRequest(BaseModel):
     auto_summary: bool = True
     llm_model: str = ''
     execution: str = ''
+    participants: str = Field(default='', max_length=3000)
+    diarize: bool = False
+    speaker_count: int = Field(default=0, ge=0, le=30)
 
 @app.post('/api/import')
 def import_file(body: ImportRequest):
@@ -165,13 +198,45 @@ def import_file(body: ImportRequest):
             raise ValueError('Format non pris en charge. Utilise un fichier audio ou vidéo.')
         if body.language not in ('fr', 'en', 'auto'):
             raise ValueError('Langue invalide.')
-        m = studio.create(body.title or path.stem, path, body.language, body.context, body.auto_summary, body.llm_model, body.execution)
+        m = studio.create(body.title or path.stem, path, body.language, body.context, body.auto_summary, body.llm_model,
+                          body.execution, body.participants, body.diarize, body.speaker_count)
         studio.launch(m['id'])
         return m
 
 @app.get('/api/meetings/{mid}')
 def meeting(mid: str):
     return studio.read(mid)
+
+class ParticipantsRequest(BaseModel):
+    participants: str = Field(max_length=3000)
+
+@app.post('/api/meetings/{mid}/participants')
+def participants(mid: str, body: ParticipantsRequest):
+    return studio.set_participants(mid, body.participants)
+
+class SpeakerRequest(BaseModel):
+    index: int = Field(ge=0)
+    start: float = Field(ge=0, allow_inf_nan=False)
+    speaker: str = Field(default='', max_length=80)
+
+@app.post('/api/meetings/{mid}/speaker')
+def speaker(mid: str, body: SpeakerRequest):
+    return studio.set_speaker(mid, body.index, body.start, body.speaker)
+
+class VoiceNameRequest(BaseModel):
+    name: str = Field(default='', max_length=80)
+
+@app.post('/api/meetings/{mid}/voices/{voice_id}')
+def name_voice(mid: str, voice_id: str, body: VoiceNameRequest):
+    return studio.name_voice(mid, voice_id, body.name)
+
+class DiarizationRequest(BaseModel):
+    speaker_count: int = Field(default=0, ge=0, le=30)
+
+@app.post('/api/meetings/{mid}/diarize')
+def diarize_meeting(mid: str, body: DiarizationRequest):
+    studio.launch_diarization(mid, body.speaker_count)
+    return {'ok': True}
 
 class RetryRequest(BaseModel):
     summary_only: bool = False
@@ -219,12 +284,16 @@ class RecordingRequest(BaseModel):
     context: str = Field(default='', max_length=3000)
     llm_model: str = ''
     execution: str = ''
+    participants: str = Field(default='', max_length=3000)
+    diarize: bool = False
+    speaker_count: int = Field(default=0, ge=0, le=30)
 
 @app.post('/api/record/start')
 def record_start(body: RecordingRequest):
     if body.language not in ('fr', 'en', 'auto'):
         raise ValueError('Langue invalide.')
-    return studio.start_recording(body.title, body.system_id, body.mic_id, body.language, body.context, body.llm_model, body.execution)
+    return studio.start_recording(body.title, body.system_id, body.mic_id, body.language, body.context, body.llm_model,
+                                  body.execution, body.participants, body.diarize, body.speaker_count)
 
 @app.post('/api/record/stop')
 def record_stop():

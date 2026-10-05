@@ -33,7 +33,8 @@ la capture. La capture enregistre ce que les périphériques sélectionnés reç
 ## Choisir le modèle et le matériel
 
 Dans **Catalogue de modèles**, télécharger les modèles souhaités et définir le
-modèle par défaut. Les entrées affichent leur date de sortie, taille et fiche.
+modèle par défaut. Les entrées initiales affichent leur date de sortie ; les
+nouveautés découvertes indiquent la date d’ajout au dépôt GGUF, la licence et la fiche.
 **Arrêter** conserve la partie reçue ; **Reprendre le téléchargement** reprend
 depuis cette partie lorsque le dépôt accepte les requêtes de plage.
 Le fichier est activé seulement après vérification complète de son SHA-256.
@@ -52,6 +53,71 @@ Un grand modèle peut être plus lent ou manquer de mémoire. Les estimations
 affichées ne comprennent pas tous les besoins du système. Qwen3.8 27B Q4_K_M
 pèse 17,44 Go : prévoir suffisamment de RAM même avec une carte de 16 Go.
 
+## Catalogue actualisable
+
+L’actualisation automatique est activée au départ. Clair consulte Hugging Face
+au démarrage si le cache a plus de 24 heures, puis vérifie chaque heure si une
+nouvelle consultation est nécessaire. L’application doit être ouverte ; aucun
+service supplémentaire n’est installé. **Actualiser maintenant** permet de
+relancer la recherche. La date et les erreurs apparaissent dans le catalogue.
+
+La découverte retient jusqu’à douze nouveaux GGUF, répartis entre Unsloth,
+bartowski et LM Studio Community : un fichier Q4_K_M unique, de 0,5 à 20 Go,
+licence ouverte reconnue, dépôt public non soumis à acceptation d’accès.
+Les modèles de génération d’images, de voix, de transcription, d’embeddings et
+les archives GGUF fractionnées sont exclus. Ce filtre est une sélection
+technique ; il ne garantit pas la qualité en français ni l’exactitude des résumés.
+Chaque nouveauté possède une révision précise et une empreinte publiée.
+Le moteur llama.cpp peut ne pas prendre en charge une architecture récente.
+
+Une panne réseau conserve les données locales. Les fichiers installés ne sont
+jamais remplacés par cette recherche, et le modèle par défaut ne change pas.
+Aucun téléchargement de poids ne démarre sans clic sur **Télécharger**.
+Le champ de recherche filtre les noms, éditeurs et licences.
+
+## Participants et voix
+
+1. Saisir les prénoms dans **Participants**, séparés par virgules, points-virgules
+   ou retours à la ligne ; ils peuvent être modifiés ensuite.
+2. Activer **Distinguer les voix après la transcription** pour un import ou une
+   capture. Les modèles sont installés par `Installer.cmd`, ou avec le bouton
+   correspondant dans le catalogue. Le moteur travaille toujours sur CPU.
+3. Laisser **Nombre de voix attendues** à 0 pour une estimation, ou indiquer
+   le nombre de personnes qui parlent réellement (1 à 30). Le nombre de noms
+   déclarés ne force pas le nombre de voix.
+4. Dans la réunion, ouvrir **Participants et voix**, écouter les extraits et
+   choisir le prénom de chaque voix. Les noms ne sont jamais devinés.
+5. Vérifier l’onglet transcription. Le sélecteur de chaque passage permet une
+   correction ou **Non attribué**. Une correction manuelle reste prioritaire
+   lorsqu’une correspondance voix/prénom est modifiée.
+6. Cliquer sur **Refaire le résumé** après les attributions. Un message signale
+   les changements non encore pris en compte ; l’ancien rapport reste conservé.
+
+**Distinguer les voix** fonctionne également après une transcription déjà
+terminée. Une réanalyse remplace les voix et leurs correspondances : revoir les
+attributions après son exécution. Une annulation conserve les attributions
+précédentes. La suppression d’un prénom efface ses attributions dans les passages
+et dans les voix, mais laisse l’ancien rapport intact jusqu’à sa régénération.
+
+Whisper produit des repères par mot pour les nouvelles transcriptions. Clair
+les rapproche des plages de parole détectées et découpe les passages aux
+changements de voix. Une couverture faible ou plusieurs voix concurrentes
+laissent le passage non attribué. Pour les anciennes transcriptions dépourvues
+de ces repères, relancer la transcription permet ce découpage. Les horodatages
+et les voix peuvent être inexacts : utiliser les extraits pour vérifier.
+
+Les noms et les étiquettes de voix apparaissent dans les exports TXT/SRT. Le
+rapport Markdown/JSON contient les participants déclarés au moment de sa
+génération. Une liste de noms seule ne constitue pas une preuve d’identité ou
+d’attribution des actions. Clair ne reconnaît pas les visages et ne constitue
+pas une bibliothèque de signatures vocales.
+
+## Apparence
+
+Le menu **Thème de l’application**, en haut à droite, propose **Thème clair**,
+**Thème sombre** et **Thème système**. Le choix est conservé dans ce navigateur.
+Le mode système suit les changements de thème du système d’exploitation.
+
 ## Consulter et exporter
 
 Le compte rendu présente les sujets, décisions, propositions à confirmer, actions
@@ -67,13 +133,15 @@ Le modèle qui a produit le compte rendu est conservé dans ses métadonnées.
 Le service écoute uniquement sur la boucle locale. Audio, transcription et résumé
 sont conservés sur le PC. Les données ne sont pas chiffrées par Clair ; elles
 utilisent les protections du disque et du compte Windows.
-Internet est nécessaire pour télécharger les composants et les modèles ; il
+Internet sert aussi à l’actualisation optionnelle du catalogue. Il est nécessaire
+pour télécharger les composants et les modèles ; il
 n'est pas nécessaire pour traiter une réunion après installation.
 
 | Dossier/fichier | Contenu |
 | --- | --- |
 | `reunions/` | Réunions, pistes audio, transcriptions et comptes rendus |
-| `models/` | Modèles de transcription et de résumé |
+| `models/` | Modèles de transcription, résumé et séparation des voix |
+| `catalog-cache.json` | Métadonnées publiques des modèles découverts et dernière consultation |
 | `bin/cpu/`, `bin/gpu/` | Moteurs locaux de résumé |
 | `runtime/`, `.venv/` | Runtime et bibliothèques Python |
 | `settings.json` | Préférences locales |

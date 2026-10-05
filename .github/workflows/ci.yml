@@ -22,6 +22,6 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.lock.txt
       - name: Check Python syntax
-        run: python -m compileall -q app.py core.py catalog.py prepare.py launch.py
+        run: python -m compileall -q app.py core.py catalog.py discovery.py voices.py prepare.py launch.py
       - name: Test without models or GPU
         run: python -m pytest tests -q
