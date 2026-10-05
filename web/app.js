@@ -85,6 +85,7 @@ function updateParticipants(m){
   if(document.activeElement!==$('meeting-speaker-count'))$('meeting-speaker-count').value=m.speaker_count||0;
   for(const id of ['meeting-participants','save-participants','meeting-speaker-count'])$(id).disabled=locked;
   $('detect-voices').disabled=locked||!m.segments.length||!state.voice_engine.installed;
+  $('retranscribe').disabled=locked||!m.segments.length;
   $('detect-voices').textContent=m.voices?.length?'Réanalyser les voix':'Distinguer les voix';
   $('report-stale').hidden=!m.report_stale;
   const vkey=JSON.stringify([m.id,m.voices,m.participants,locked]);
@@ -152,3 +153,5 @@ function applyTheme(){document.documentElement.dataset.theme=theme==='system'?(d
 $('theme-select').value=theme;applyTheme();
 $('theme-select').onchange=()=>{theme=$('theme-select').value;try{localStorage.setItem('clair-theme',theme);}catch{}applyTheme();};
 darkQuery.addEventListener('change',()=>{if(theme==='system')applyTheme();});
+
+$('retranscribe').onclick=()=>action(()=>api('meetings/'+selected+'/retry','POST',{summary_only:false,llm_model:$('summary-model').value,execution:$('summary-execution').value}));

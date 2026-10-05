@@ -103,7 +103,9 @@ Whisper produit des repères par mot pour les nouvelles transcriptions. Clair
 les rapproche des plages de parole détectées et découpe les passages aux
 changements de voix. Une couverture faible ou plusieurs voix concurrentes
 laissent le passage non attribué. Pour les anciennes transcriptions dépourvues
-de ces repères, relancer la transcription permet ce découpage. Les horodatages
+de ces repères, **Retranscrire avec les repères de mots**, dans le panneau
+participants, permet ce découpage et remplace le texte, le rapport et les
+attributions précédents. Les horodatages
 et les voix peuvent être inexacts : utiliser les extraits pour vérifier.
 
 Les noms et les étiquettes de voix apparaissent dans les exports TXT/SRT. Le
