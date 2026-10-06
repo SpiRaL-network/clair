@@ -111,7 +111,7 @@ la transcription et la diarisation avaient déjà terminé.
 
 Le correctif sérialise les lectures et sauvegardes de la même instance, écrit
 un temporaire unique et complet, puis réessaie le remplacement atomique en cas
-de PermissionError : huit tentatives, attente cumulée maximale de 2,75 secondes
+de PermissionError : huit tentatives, attente cumulée maximale de 2,25 secondes
 (hors temps des appels système). L’ancien JSON reste intact jusqu’au succès.
 En cas de verrou persistant, le temporaire complet est gardé pour récupération.
 
