@@ -204,3 +204,17 @@ Un échantillon mal nommé ou contenant plusieurs personnes peut produire de
 mauvaises attributions : le système compare des sons, il ne prouve pas une
 identité. Le GPU peut être plus lent sur de très courts extraits à cause du
 chargement des modèles ; le premier lancement CUDA peut aussi être plus long.
+
+## Erreur de sauvegarde WinError 5
+
+Le correctif 1.3.1 gère les verrouillages temporaires de `meeting.json` sous
+Windows. Fermer Clair puis récupérer les sources mises à jour et relancer
+l’application suffit pour appliquer ce correctif ; les dépendances sont
+identiques à celles de 1.3.
+
+Si une ancienne exécution s’est arrêtée pendant le résumé alors que la
+transcription est complète, cliquer sur **Générer le résumé** pour reprendre
+cette étape avec les passages déjà sauvegardés. **Relancer la transcription**
+recommence l’import et remplace les résultats précédents. Si le verrou reste
+permanent, Clair conserve le JSON précédent ainsi qu’un temporaire complet
+`meeting-*.tmp` dans le dossier de la réunion pour récupération.

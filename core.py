@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 import secrets
 import subprocess
+import tempfile
 import threading
 import time
 import wave
@@ -28,6 +29,33 @@ import requests
 from pydantic import BaseModel, Field
 from catalog import ModelCatalog
 from voices import VoiceEngine, split_at_voice_changes, apply_reference_names
+
+
+def atomic_json_write(path, value):
+    """Keep the old JSON intact while Windows readers/indexers briefly deny replacement."""
+    path = Path(path)
+    fd, name = tempfile.mkstemp(prefix='meeting-', suffix='.tmp', dir=path.parent)
+    temporary = Path(name)
+    written = committed = False
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as output:
+            json.dump(value, output, ensure_ascii=False, indent=2)
+            output.flush()
+            os.fsync(output.fileno())
+        written = True
+        for attempt in range(8):
+            try:
+                temporary.replace(path)
+                committed = True
+                return
+            except PermissionError:
+                if attempt == 7:
+                    raise
+                time.sleep(min(.05 * 2 ** attempt, .5))
+    finally:
+        # On a persistent lock, retain a complete recovery snapshot, never truncate the old JSON.
+        if committed or not written:
+            temporary.unlink(missing_ok=True)
 
 def stamp(seconds: float) -> str:
     seconds = max(0, int(seconds))
@@ -400,15 +428,15 @@ class Studio:
         return DATA / mid
 
     def read(self, mid):
-        return json.loads((self.folder(mid) / 'meeting.json').read_text(encoding='utf-8'))
+        # Python opens on Windows do not share DELETE; serialize readers with atomic replacements.
+        with self.lock:
+            return json.loads((self.folder(mid) / 'meeting.json').read_text(encoding='utf-8'))
 
     def save(self, meeting):
         with self.lock:
             folder = self.folder(meeting['id'])
             folder.mkdir(exist_ok=True)
-            tmp = folder / 'meeting.tmp'
-            tmp.write_text(json.dumps(meeting, ensure_ascii=False, indent=2), encoding='utf-8')
-            tmp.replace(folder / 'meeting.json')
+            atomic_json_write(folder / 'meeting.json', meeting)
 
     def update(self, mid, **values):
         with self.lock:

@@ -164,3 +164,14 @@ retrait de la dernière référence. Le batch de références, les attributions,
 les métriques et les exports ne sont validés qu’après réussite, jamais après
 annulation. Les vecteurs ne sont pas enregistrés : ils sont recalculés depuis
 l’audio local. Retirer un participant supprime également ses références.
+
+### Sauvegarde des réunions sous Windows
+
+`Studio.read`, `update`, `save` et `listing` partagent le verrou réentrant de
+l’instance. Les handles de lecture Python sur Windows ne partagent pas DELETE :
+une lecture simultanée pouvait empêcher le renommage du JSON par le worker.
+`atomic_json_write` ferme et synchronise un temporaire unique avant le
+remplacement atomique, puis réessaie uniquement les PermissionError avec une
+attente bornée. L’ancien fichier reste lisible et complet. Un verrou persistant
+laisse un fichier `meeting-*.tmp` complet, sans remplacer le JSON valide par une
+écriture en place ni modifier les droits du dossier.

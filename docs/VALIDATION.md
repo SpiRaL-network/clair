@@ -1,4 +1,4 @@
-# Validation — 5 octobre 2026
+# Validation — 6 octobre 2026
 
 Essais effectués sur Windows, avec 32 Go de RAM et une NVIDIA RTX 5080 de 16 Go.
 Les enregistrements, transcriptions, noms de réunions et chemins personnels ne
@@ -6,7 +6,7 @@ sont pas inclus dans le dépôt.
 
 ## Tests automatisés
 
-**52 tests passent** sans modèles réels ni GPU :
+**56 tests passent** sans modèles réels ni GPU :
 
 1. Conservation des passages lors du découpage d'une longue transcription.
 2. Reprise après interruption et validation des identifiants/chemins.
@@ -101,3 +101,22 @@ La comparaison des références est validée sur un court échantillon public de
 deux voix. Elle n’est pas une évaluation statistique sur les participants réels
 de la réunion complète, dont les identités ne sont pas annotées. Le GPU ne
 garantit pas une accélération de la diarisation ; CPU reste un choix pertinent.
+
+## Correctif de sauvegarde Windows — 6 octobre 2026
+
+Un remplacement de `meeting.tmp` vers `meeting.json` pouvait échouer avec
+WinError 5 pendant une lecture du fichier (API ou lecteur externe). L’échec
+observé sur un enregistrement de 47 min 24 s est survenu pendant le résumé ;
+la transcription et la diarisation avaient déjà terminé.
+
+Le correctif sérialise les lectures et sauvegardes de la même instance, écrit
+un temporaire unique et complet, puis réessaie le remplacement atomique en cas
+de PermissionError : huit tentatives, attente cumulée maximale de 2,75 secondes
+(hors temps des appels système). L’ancien JSON reste intact jusqu’au succès.
+En cas de verrou persistant, le temporaire complet est gardé pour récupération.
+
+Quatre régressions couvrent : refus temporaire avec succès, refus permanent
+avec conservation des données et de temporaires distincts, véritable handle
+Windows sans partage DELETE libéré après 200 ms, et concurrence entre lecteur
+API et écrivain de progression. La vidéo complète a été reprise à l’étape du
+résumé, avec contrôle des empreintes de la transcription et des sous-titres.
