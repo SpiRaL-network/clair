@@ -34,6 +34,7 @@ class Response:
 def engine(monkeypatch):
     llm = core.LocalLLM()
     monkeypatch.setattr(llm, 'start', lambda cancelled: None)
+    monkeypatch.setattr(llm, 'prompt_tokens', lambda messages: 100)
     return llm
 
 
@@ -83,6 +84,42 @@ def test_cancel_during_stream_stops_without_retry(engine, monkeypatch):
     monkeypatch.setattr(core.requests, 'post', post)
     with pytest.raises(core.Cancelled): engine.ask('Source', cancelled)
     assert len(calls) == 1 and stopped == [True]
+
+
+def test_retry_budget_respects_actual_context_space(engine, monkeypatch):
+    monkeypatch.setattr(engine, 'prompt_tokens', lambda messages: 11000)
+    calls = []
+    responses = iter([stream('{', 'length'), stream(json.dumps(report()))])
+    def post(*args, **kwargs):
+        calls.append(kwargs['json']['max_tokens'])
+        return Response(next(responses))
+    monkeypatch.setattr(core.requests, 'post', post)
+    engine.ask('Source entière', threading.Event())
+    assert calls == [4200, 5128]
+
+
+def test_oversized_prompt_is_rejected_before_inference(engine, monkeypatch):
+    monkeypatch.setattr(engine, 'prompt_tokens', lambda messages: 16000)
+    def unexpected(*args, **kwargs): raise AssertionError('Cannot fit this prompt')
+    monkeypatch.setattr(core.requests, 'post', unexpected)
+    with pytest.raises(RuntimeError, match='contexte'): engine.ask('Source entière', threading.Event())
+
+
+def test_prompt_token_count_uses_model_chat_template(monkeypatch):
+    llm = core.LocalLLM()
+    calls = []
+    class JsonResponse(Response):
+        def __init__(self, value): self.value = value
+        def json(self): return self.value
+    def post(url, **kwargs):
+        calls.append((url, kwargs))
+        return JsonResponse({'prompt': '<user>source<assistant>'} if url.endswith('/apply-template') else {'tokens': [1, 2, 3]})
+    monkeypatch.setattr(core.requests, 'post', post)
+    messages = [{'role': 'user', 'content': 'source'}]
+    assert llm.prompt_tokens(messages) == 3
+    assert calls[0][1]['json'] == {'messages': messages}
+    assert calls[1][1]['json']['content'] == '<user>source<assistant>'
+    assert all('Authorization' in kwargs['headers'] for _, kwargs in calls)
 
 
 @pytest.fixture
@@ -167,3 +204,21 @@ def test_summary_failure_is_marked_for_safe_retry(meeting, monkeypatch):
     m = studio.read(mid)
     assert m['status'] == 'error' and m['failed_stage'] == 'summary'
     assert m['segments'] == before
+
+
+@pytest.mark.parametrize('repetitions', [600, 1000])
+def test_dense_notes_still_consolidate_without_dropping_a_part(meeting, monkeypatch, repetitions):
+    studio, mid = meeting
+    studio.update(mid, segments=studio.read(mid)['segments'][:2])
+    calls = []
+    def dense(source, *args, **kwargs):
+        calls.append(source)
+        value = report('Note ' + str(len(calls)))
+        value['overview'] = 'Faits détaillés. ' * repetitions
+        return value
+    monkeypatch.setattr(studio.llm, 'ask', dense)
+    studio.summarize(mid)
+    assert len(calls) == 3
+    combined = json.loads(calls[-1])
+    assert [note['title'] for note in combined] == ['Note 1', 'Note 2']
+    assert studio.read(mid)['report']['title'] == 'Note 3'

@@ -208,6 +208,17 @@ class LocalLLM:
             self.log.close()
             self.log = None
 
+    def prompt_tokens(self, messages):
+        headers = {'Authorization': f'Bearer {self.key}'}
+        base = f'http://127.0.0.1:{self.port}'
+        response = requests.post(base + '/apply-template', json={'messages': messages}, headers=headers, timeout=30)
+        response.raise_for_status()
+        prompt = response.json()['prompt']
+        response = requests.post(base + '/tokenize', json={'content': prompt, 'add_special': True},
+                                 headers=headers, timeout=30)
+        response.raise_for_status()
+        return len(response.json()['tokens'])
+
     def ask(self, text, cancelled, instructions='', min_topics=None):
         self.start(cancelled)
         system = (
@@ -252,13 +263,18 @@ class LocalLLM:
         for attempt, budget in enumerate((4200, 8192)):
             if cancelled.is_set():
                 raise Cancelled()
-            payload['max_tokens'] = budget
             if attempt:
                 payload['messages'][0]['content'] = system + (
                     ' La génération précédente était incomplète. Réécris un JSON complet depuis la SOURCE. '
                     'Fusionne les doublons, reste concis sans perdre les faits importants, '
                     'et termine toutes les listes et l’objet JSON.')
             try:
+                # Reserve space in the configured 16K context; never discard the beginning of a prompt.
+                available = 16384 - self.prompt_tokens(payload['messages']) - 256
+                if available < 1024:
+                    raise RuntimeError('Les notes dépassent le contexte de ce modèle. '
+                                       'La transcription est conservée. Choisissez un autre modèle puis reprenez le résumé.')
+                payload['max_tokens'] = min(budget, available)
                 output, finish_reason, done = [], None, False
                 with requests.post(f'http://127.0.0.1:{self.port}/v1/chat/completions', json=payload,
                                    headers={'Authorization': f'Bearer {self.key}'}, stream=True,
@@ -869,18 +885,22 @@ class Studio:
             notes.append(ask(context + part))
         while len(notes) > 1:
             self.update(mid, message='Consolidation du compte rendu…', progress=96)
-            groups, group, size = [], [], 0
-            for note in notes:
-                length = len(json.dumps(note, ensure_ascii=False))
-                if group and size + length > 18000:
+            # Prefer smaller prompts; the tokenizer protects larger pairs from context overflow.
+            for limit in (18000, 26000):
+                groups, group, size = [], [], 0
+                for note in notes:
+                    length = len(json.dumps(note, ensure_ascii=False))
+                    if group and size + length > limit:
+                        groups.append(group)
+                        group, size = [], 0
+                    group.append(note)
+                    size += length
+                if group:
                     groups.append(group)
-                    group, size = [], 0
-                group.append(note)
-                size += length
-            if group:
-                groups.append(group)
-            if len(groups) >= len(notes):
-                raise RuntimeError('Les notes intermédiaires sont trop volumineuses pour ce modèle.')
+                if len(groups) < len(notes):
+                    break
+            else:
+                groups = [notes[i:i + 2] for i in range(0, len(notes), 2)]
             notes = [ask(json.dumps(group, ensure_ascii=False),
                                  'Ces notes proviennent de différents passages d’UNE SEULE RÉUNION. '
                                  'Ne parle pas de plusieurs réunions. Fusionne sans perdre les sujets distincts, '

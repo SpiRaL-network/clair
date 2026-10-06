@@ -55,10 +55,18 @@ aux segments sont supprimés. Ces contrôles ne garantissent pas l'exactitude du
 Le flux SSE doit se terminer par `finish_reason=stop` et `[DONE]`, puis le
 rapport complet doit passer la validation Pydantic. Une réponse coupée, invalide
 ou une connexion interrompue déclenche une seule nouvelle génération depuis la
-source originale, avec une limite de 8 192 tokens au lieu de 4 200. Aucun JSON
+source originale, avec une limite allant jusqu’à 8 192 tokens au lieu de 4 200. Aucun JSON
 partiel n’est réparé artificiellement ni accepté comme compte rendu complet.
 Les notes sont consolidées par groupes de 18 000 caractères pour laisser
 davantage de place à la sortie dans le contexte de 16 384 tokens du moteur.
+Si des notes denses empêchent toute fusion, le plafond antérieur de 26 000
+caractères est essayé, puis les notes sont réunies par paires. Aucune partie
+n’est supprimée pour forcer la fusion. Avant chaque génération, `/apply-template`
+et `/tokenize` comptent le prompt complet avec le tokenizer du modèle. La sortie
+est limitée à l’espace restant, avec une marge de 256 tokens ; un prompt ne
+laissant pas au moins 1 024 tokens est refusé avant l’inférence. Ces appels
+restent sur la boucle locale et ne téléchargent ni ne transmettent de données
+à un service externe.
 
 Chaque réponse validée est sauvegardée atomiquement dans un checkpoint privé
 de la réunion. La reprise réutilise les parties et consolidations achevées si
