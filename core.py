@@ -2,6 +2,7 @@ from __future__ import annotations
 import atexit
 import copy
 import gc
+import hashlib
 import json
 import os
 import re
@@ -26,7 +27,7 @@ os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'
 
 import numpy as np
 import requests
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from catalog import ModelCatalog
 from voices import VoiceEngine, split_at_voice_changes, apply_reference_names
 
@@ -140,6 +141,9 @@ def markdown_report(report: dict) -> str:
 class Cancelled(Exception):
     pass
 
+class IncompleteReport(RuntimeError):
+    pass
+
 class LocalLLM:
     def __init__(self, catalog=None):
         self.catalog = catalog or ModelCatalog(ROOT)
@@ -244,23 +248,52 @@ class LocalLLM:
                                 {'role': 'user', 'content': 'SOURCE À ANALYSER:\n' + text}],
                    'temperature': .1, 'max_tokens': 4200, 'stream': True,
                    'response_format': {'type': 'json_schema', 'json_schema': {'name': 'meeting_report', 'strict': True, 'schema': schema}}}
-        output = []
-        with requests.post(f'http://127.0.0.1:{self.port}/v1/chat/completions', json=payload,
-                           headers={'Authorization': f'Bearer {self.key}'}, stream=True,
-                           timeout=(10, 180)) as response:
-            response.raise_for_status()
-            for line in response.iter_lines():
+        # A JSON grammar does not prevent a token limit or a dropped stream from cutting it short.
+        for attempt, budget in enumerate((4200, 8192)):
+            if cancelled.is_set():
+                raise Cancelled()
+            payload['max_tokens'] = budget
+            if attempt:
+                payload['messages'][0]['content'] = system + (
+                    ' La génération précédente était incomplète. Réécris un JSON complet depuis la SOURCE. '
+                    'Fusionne les doublons, reste concis sans perdre les faits importants, '
+                    'et termine toutes les listes et l’objet JSON.')
+            try:
+                output, finish_reason, done = [], None, False
+                with requests.post(f'http://127.0.0.1:{self.port}/v1/chat/completions', json=payload,
+                                   headers={'Authorization': f'Bearer {self.key}'}, stream=True,
+                                   timeout=(10, 180)) as response:
+                    response.raise_for_status()
+                    for line in response.iter_lines():
+                        if cancelled.is_set():
+                            self.stop()
+                            raise Cancelled()
+                        if not line.startswith(b'data: '):
+                            continue
+                        value = line[6:]
+                        if value == b'[DONE]':
+                            done = True
+                            break
+                        event = json.loads(value)
+                        if event.get('error'):
+                            raise IncompleteReport('Le moteur a interrompu sa réponse.')
+                        choices = event.get('choices') or []
+                        if choices:
+                            choice = choices[0]
+                            output.append(choice.get('delta', {}).get('content') or '')
+                            finish_reason = choice.get('finish_reason') or finish_reason
+                if not done or finish_reason != 'stop':
+                    raise IncompleteReport('La réponse du modèle est incomplète.')
+                return Report.model_validate_json(''.join(output)).model_dump()
+            except (ValidationError, IncompleteReport, ValueError,
+                    requests.exceptions.ChunkedEncodingError, requests.exceptions.ConnectionError,
+                    requests.exceptions.Timeout) as error:
                 if cancelled.is_set():
-                    self.stop()
-                    raise Cancelled()
-                if not line.startswith(b'data: '):
-                    continue
-                value = line[6:]
-                if value == b'[DONE]':
-                    break
-                event = json.loads(value)
-                output.append(event.get('choices', [{}])[0].get('delta', {}).get('content') or '')
-        return Report.model_validate_json(''.join(output)).model_dump()
+                    raise Cancelled() from error
+                if attempt:
+                    raise RuntimeError('Le modèle n’a pas terminé un compte rendu valide après deux tentatives. '
+                                       'La transcription et les parties déjà résumées sont conservées. '
+                                       'Cliquez sur « Reprendre le résumé » ou choisissez un autre modèle.') from error
 
 class Recorder:
     def __init__(self):
@@ -416,6 +449,7 @@ class Studio:
             try:
                 m = json.loads(p.read_text(encoding='utf-8'))
                 if m['status'] in ('queued', 'transcribing', 'summarizing', 'diarizing', 'recording', 'preparing'):
+                    m['failed_stage'] = {'summarizing': 'summary', 'diarizing': 'voices'}.get(m['status'], 'transcription')
                     m.update(status='interrupted', message='Traitement interrompu. Tu peux le relancer.')
                     self.save(m)
             except (ValueError, KeyError):
@@ -690,12 +724,14 @@ class Studio:
     def run(self, mid, summary_only=False, mix=False):
         started = time.time()
         model = None
+        stage = 'summary' if summary_only else 'transcription'
         try:
+            self.update(mid, failed_stage=None)
             m = self.read(mid)
             if not summary_only:
                 self.llm.stop()
                 self.update(mid, segments=[], report=None, voices=[], voice_turns=[], report_stale=False)
-                for name in ('transcription.txt', 'sous-titres.srt', 'compte-rendu.md', 'compte-rendu.json'):
+                for name in ('transcription.txt', 'sous-titres.srt', 'compte-rendu.md', 'compte-rendu.json', 'summary-checkpoint.json'):
                     (self.folder(mid) / name).unlink(missing_ok=True)
                 if mix:
                     self.update(mid, status='preparing', message='Assemblage du son de Teams et du micro…', progress=2)
@@ -749,9 +785,11 @@ class Studio:
                 if not collected:
                     raise RuntimeError('Aucune parole détectée. Vérifie les sources audio et le volume.')
                 if m.get('diarize'):
+                    stage = 'voices'
                     self.diarize(mid)
             m = self.read(mid)
             if summary_only or m['auto_summary']:
+                stage = 'summary'
                 summary_started = time.time()
                 self.summarize(mid)
                 self.update(mid, summary_seconds=round(time.time() - summary_started))
@@ -761,13 +799,13 @@ class Studio:
             self.update(mid, status='done', progress=100, message='Terminé', processing_seconds=elapsed)
         except Cancelled:
             self.write_transcript(mid)
-            self.update(mid, status='cancelled', message='Traitement annulé. La transcription disponible est conservée.')
+            self.update(mid, status='cancelled', failed_stage=stage, message='Traitement annulé. La transcription disponible est conservée.')
         except Exception as e:
             import traceback
             with (ROOT / 'application.log').open('a', encoding='utf-8') as f:
                 traceback.print_exc(file=f)
             self.write_transcript(mid)
-            self.update(mid, status='error', message=str(e)[:600])
+            self.update(mid, status='error', failed_stage=stage, message=str(e)[:600])
         finally:
             model = None
             gc.collect()
@@ -796,6 +834,30 @@ class Studio:
         self.llm.execution = m.get('execution', 'auto')
         if not m['segments']:
             raise RuntimeError('Il faut une transcription avant de créer un résumé.')
+        checkpoint_path = self.folder(mid) / 'summary-checkpoint.json'
+        identity = {'version': 2, 'segments': m['segments'], 'participants': m.get('participants', []),
+                    'model': self.catalog.entry(self.llm.model_id), 'execution': self.llm.execution}
+        fingerprint = hashlib.sha256(json.dumps(identity, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        checkpoint = {'fingerprint': fingerprint, 'reports': {}}
+        try:
+            cached = json.loads(checkpoint_path.read_text(encoding='utf-8'))
+            if cached.get('fingerprint') == fingerprint and isinstance(cached.get('reports'), dict):
+                checkpoint = cached
+        except (FileNotFoundError, ValueError, AttributeError):
+            pass
+        def ask(source, instructions='', min_topics=None):
+            self.check()
+            key = hashlib.sha256(json.dumps([source, instructions, min_topics], ensure_ascii=False).encode()).hexdigest()
+            if key in checkpoint['reports']:
+                try:
+                    return Report.model_validate(checkpoint['reports'][key]).model_dump()
+                except ValidationError:
+                    del checkpoint['reports'][key]
+            report = self.llm.ask(source, self.cancelled, instructions, min_topics=min_topics)
+            checkpoint['reports'][key] = Report.model_validate(report).model_dump()
+            checkpoint['device'] = self.llm.device
+            atomic_json_write(checkpoint_path, checkpoint)
+            return report
         parts = list(chunks(m['segments']))
         notes = []
         for i, part in enumerate(parts):
@@ -804,13 +866,13 @@ class Studio:
                         message=f'Compte rendu local · partie {i + 1} / {len(parts)}…')
             context = ('Participants déclarés (contexte, pas une attribution des voix) : ' +
                        json.dumps(m.get('participants', []), ensure_ascii=False) + '\n\n')
-            notes.append(self.llm.ask(context + part, self.cancelled))
+            notes.append(ask(context + part))
         while len(notes) > 1:
             self.update(mid, message='Consolidation du compte rendu…', progress=96)
             groups, group, size = [], [], 0
             for note in notes:
                 length = len(json.dumps(note, ensure_ascii=False))
-                if group and size + length > 26000:
+                if group and size + length > 18000:
                     groups.append(group)
                     group, size = [], 0
                 group.append(note)
@@ -819,7 +881,7 @@ class Studio:
                 groups.append(group)
             if len(groups) >= len(notes):
                 raise RuntimeError('Les notes intermédiaires sont trop volumineuses pour ce modèle.')
-            notes = [self.llm.ask(json.dumps(group, ensure_ascii=False), self.cancelled,
+            notes = [ask(json.dumps(group, ensure_ascii=False),
                                  'Ces notes proviennent de différents passages d’UNE SEULE RÉUNION. '
                                  'Ne parle pas de plusieurs réunions. Fusionne sans perdre les sujets distincts, '
                                  'les livrables, la procédure, les contraintes, les risques et les prochaines étapes. '
@@ -847,10 +909,13 @@ class Studio:
         self.check()
         report['model'] = {'id': self.llm.model_id, 'name': self.catalog.entry(self.llm.model_id)['name']}
         report['model']['execution'] = self.llm.device
+        if self.llm.device is None:
+            report['model']['execution'] = checkpoint.get('device')
         report['participants'] = m.get('participants', [])
-        self.update(mid, report=report, report_model=self.llm.model_id, summary_device=self.llm.device, report_stale=False)
+        self.update(mid, report=report, report_model=self.llm.model_id, summary_device=report['model']['execution'], report_stale=False)
         (self.folder(mid) / 'compte-rendu.md').write_text(markdown_report(report) + '\n\nModèle : ' + report['model']['name'], encoding='utf-8')
         (self.folder(mid) / 'compte-rendu.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+        checkpoint_path.unlink(missing_ok=True)
 
     def start_recording(self, title, system_id, mic_id, language='auto', context='', llm_model=None, execution=None, participants='', diarize=False, speaker_count=0, voice_execution=None):
         with self.lock:

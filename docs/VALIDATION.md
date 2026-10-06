@@ -6,7 +6,7 @@ sont pas inclus dans le dépôt.
 
 ## Tests automatisés
 
-**56 tests passent** sans modèles réels ni GPU :
+**70 tests passent** sans modèles réels ni GPU :
 
 1. Conservation des passages lors du découpage d'une longue transcription.
 2. Reprise après interruption et validation des identifiants/chemins.
@@ -120,3 +120,18 @@ avec conservation des données et de temporaires distincts, véritable handle
 Windows sans partage DELETE libéré après 200 ms, et concurrence entre lecteur
 API et écrivain de progression. La vidéo complète a été reprise à l’étape du
 résumé, avec contrôle des empreintes de la transcription et des sous-titres.
+
+## Réponses de résumé incomplètes — version 1.3.2
+
+Une consolidation avait atteint exactement 4 200 tokens et produit un JSON
+inachevé. Quatorze tests supplémentaires couvrent les limites de génération,
+le flux interrompu, le JSON invalide et les champs manquants, une seule nouvelle
+tentative avec une limite supérieure, le refus des sorties partielles et
+l’annulation sans relance. Ils vérifient aussi la reprise des parties déjà
+calculées, l’invalidation après changement des passages, participants, modèle
+ou mode d’exécution, la conservation du dispositif dans un cache complet et
+le marquage des erreurs de résumé pour une reprise sans retranscription.
+
+Le test réel de la réunion longue est effectué avec Gemma 4 12B sur GPU, à partir
+de la transcription existante. Les enregistrements et checkpoints restent hors
+du dépôt public ; la reprise est contrôlée par empreintes des passages et exports.

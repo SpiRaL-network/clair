@@ -218,3 +218,21 @@ cette étape avec les passages déjà sauvegardés. **Relancer la transcription*
 recommence l’import et remplace les résultats précédents. Si le verrou reste
 permanent, Clair conserve le JSON précédent ainsi qu’un temporaire complet
 `meeting-*.tmp` dans le dossier de la réunion pour récupération.
+
+## Compte rendu incomplet ou erreur JSON
+
+La version 1.3.2 détecte les réponses coupées du modèle et réessaie automatiquement
+avec davantage de place pour la réponse. Les parties déjà résumées sont conservées
+localement, même si le traitement échoue ou est interrompu.
+
+Après une erreur de résumé, utiliser **Reprendre le résumé**. La transcription
+et les voix sont conservées ; les parties valides sont réutilisées tant que la
+transcription, les participants, le modèle et le mode d’exécution n’ont pas changé.
+Un changement de modèle relance le résumé depuis les passages existants.
+Les anciennes erreurs peuvent encore proposer **Relancer la transcription** :
+utiliser alors **Générer le résumé** sous les sélecteurs du modèle pour conserver
+la transcription. **Retranscrire avec les repères de mots** recommence cette
+étape et remplace les passages et attributions précédents.
+
+Le fichier `summary-checkpoint.json` reste privé dans le dossier de la réunion.
+Il est supprimé lorsque le compte rendu et ses exports ont été enregistrés.

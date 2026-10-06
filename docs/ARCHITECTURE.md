@@ -52,6 +52,24 @@ au schéma Pydantic du rapport. Les prompts distinguent décisions et propositio
 et demandent des extraits justificatifs. Les horodatages qui ne correspondent pas
 aux segments sont supprimés. Ces contrôles ne garantissent pas l'exactitude du fond.
 
+Le flux SSE doit se terminer par `finish_reason=stop` et `[DONE]`, puis le
+rapport complet doit passer la validation Pydantic. Une réponse coupée, invalide
+ou une connexion interrompue déclenche une seule nouvelle génération depuis la
+source originale, avec une limite de 8 192 tokens au lieu de 4 200. Aucun JSON
+partiel n’est réparé artificiellement ni accepté comme compte rendu complet.
+Les notes sont consolidées par groupes de 18 000 caractères pour laisser
+davantage de place à la sortie dans le contexte de 16 384 tokens du moteur.
+
+Chaque réponse validée est sauvegardée atomiquement dans un checkpoint privé
+de la réunion. La reprise réutilise les parties et consolidations achevées si
+l’empreinte des passages, participants, modèle (révision incluse), mode
+d’exécution et version du traitement est identique. Chaque entrée du cache est
+revalidée avant usage. Le checkpoint est supprimé après les exports réussis ou
+au début d’une retranscription complète. Un échec du résumé est identifié
+séparément pour proposer sa reprise sans effacer la transcription.
+
+API du moteur : [documentation officielle llama.cpp](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md).
+
 Le moteur est arrêté après traitement. Le CPU utilise son propre binaire avec
 zéro couche GPU et aucun déport sur GPU. Le moteur GPU ajuste la répartition
 des couches à la mémoire disponible. Les modèles multimodaux du catalogue sont
